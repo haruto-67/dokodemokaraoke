@@ -1,0 +1,179 @@
+/* 本番(カラオケ再生)画面(§3 画面 #4, §4.10) */
+
+.perform-screen {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  overflow: hidden;
+  background: var(--color-bg);
+  cursor: none;
+}
+.perform-screen:hover {
+  cursor: default;
+}
+
+.perform-progress {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: rgba(201, 194, 223, 0.1);
+}
+.perform-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--color-accent), var(--color-accent-2));
+  transition: width 0.1s linear;
+}
+
+.perform-pitch-strip {
+  position: relative;
+  height: 90px;
+  overflow: hidden;
+  margin: 24px 0;
+  opacity: 0.85;
+}
+.perform-pitch-strip-inner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  will-change: transform;
+}
+.perform-pitch-marker {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #ffffff;
+  box-shadow: 0 0 10px rgba(255, 255, 255, 0.9);
+}
+
+.perform-lyrics {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  padding: 0 48px;
+  text-align: center;
+}
+
+.perform-line {
+  font-family: var(--font-lyrics);
+}
+
+.perform-line-adjacent {
+  font-size: 22px;
+  color: var(--color-text-weakest);
+  min-height: 30px;
+}
+
+.perform-line-current {
+  font-size: 56px;
+  font-weight: 600;
+  min-height: 80px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: flex-end;
+}
+
+.perform-token {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  margin: 0 1px;
+}
+
+.perform-token-ruby-wrap,
+.perform-token-text-wrap {
+  position: relative;
+  display: inline-block;
+  white-space: pre;
+}
+
+.perform-token-ruby-wrap {
+  font-size: 18px;
+  line-height: 1.4;
+}
+
+.perform-token-ruby-base,
+.perform-token-text-base {
+  color: rgba(245, 241, 255, 0.28);
+}
+
+.perform-token-ruby-fill,
+.perform-token-text-fill {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0%;
+  overflow: hidden;
+  white-space: pre;
+  color: var(--color-accent);
+  font-style: italic;
+}
+
+.perform-countdown {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-family: var(--font-mono);
+  font-size: 96px;
+  font-weight: 700;
+  color: var(--color-accent);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+  text-shadow: var(--glow-accent);
+}
+.perform-countdown.visible {
+  opacity: 0.9;
+}
+
+.perform-controls {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 24px;
+  background: linear-gradient(0deg, rgba(21, 15, 38, 0.85), transparent);
+  opacity: 0;
+  transition: opacity 0.4s ease;
+  pointer-events: none;
+  cursor: default;
+}
+.perform-controls.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.perform-time {
+  margin-left: auto;
+  color: var(--color-text-weak);
+}
+
+.perform-offset-indicator {
+  position: absolute;
+  top: 24px;
+  right: 24px;
+  padding: 8px 14px;
+  border-radius: var(--radius-input);
+  background: rgba(37, 28, 64, 0.9);
+  border: 1px solid var(--color-border);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--color-accent);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+.perform-offset-indicator.visible {
+  opacity: 1;
+}

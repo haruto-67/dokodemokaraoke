@@ -3,6 +3,7 @@ import './styles/home.css'
 import './styles/setup.css'
 import './styles/screens.css'
 import './styles/editor.css'
+import './styles/perform.css'
 import { createAppContext } from './appContext'
 import { createRouter } from './app'
 import {
