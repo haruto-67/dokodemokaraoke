@@ -59,38 +59,6 @@
   font-size: 13px;
 }
 
-.editor-screen {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-}
-
-.editor-header {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 16px 24px;
-  border-bottom: 1px solid var(--color-border);
-}
-
-.editor-title {
-  flex: 1;
-  font-family: var(--font-display);
-  font-size: 18px;
-  margin: 0;
-}
-
-.editor-body {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.editor-placeholder {
-  color: var(--color-text-weak);
-}
-
 .perform-screen {
   position: relative;
   flex-direction: column;

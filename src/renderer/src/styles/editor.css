@@ -1,0 +1,243 @@
+/* 編集画面(§3 画面 #3, §4.6〜§4.9) */
+
+.editor-screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.editor-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.editor-title {
+  flex: 1;
+  font-family: var(--font-display);
+  font-size: 18px;
+  margin: 0;
+}
+
+.editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 24px;
+  border-bottom: 1px solid var(--color-border);
+  flex-wrap: wrap;
+}
+
+.editor-toolbar .btn {
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.editor-toolbar .btn.active {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.editor-toolbar-spacer {
+  flex: 1;
+}
+
+.editor-time,
+.editor-offset {
+  font-size: 12px;
+  color: var(--color-text-weak);
+  min-width: 64px;
+}
+
+.editor-select {
+  background: var(--color-panel-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-input);
+  color: var(--color-text);
+  padding: 5px 8px;
+  font-size: 12px;
+}
+
+.editor-main {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.editor-track-scroll {
+  flex: 1;
+  overflow-x: auto;
+  overflow-y: hidden;
+  position: relative;
+  background: var(--color-bg);
+}
+
+.editor-track {
+  position: relative;
+  height: 100%;
+  min-height: 220px;
+}
+
+.editor-ribbon {
+  position: relative;
+}
+
+.editor-ribbon-svg {
+  display: block;
+}
+
+.editor-blocks-layer,
+.editor-boundary-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+}
+
+.editor-blocks-layer {
+  top: 110px;
+}
+
+.editor-boundary-layer {
+  top: 154px;
+}
+
+.editor-block {
+  position: absolute;
+  top: 2px;
+  height: 36px;
+  border-radius: 6px;
+  background: rgba(242, 183, 5, 0.35);
+  border: 1px solid rgba(242, 183, 5, 0.6);
+  color: var(--color-text);
+  font-size: 12px;
+  padding: 4px 8px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  cursor: grab;
+  pointer-events: auto;
+}
+
+.editor-block.selected {
+  background: rgba(239, 93, 116, 0.4);
+  border-color: var(--color-accent-2);
+}
+
+.editor-block-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: ew-resize;
+}
+.editor-block-handle.left {
+  left: 0;
+}
+.editor-block-handle.right {
+  right: 0;
+}
+
+.editor-token {
+  position: absolute;
+  top: 0;
+  height: 32px;
+  border-radius: 4px;
+  background: rgba(242, 183, 5, 0.18);
+  border: 1px solid rgba(242, 183, 5, 0.4);
+  font-size: 11px;
+  color: var(--color-text-weak);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  pointer-events: auto;
+}
+
+.editor-token.locked {
+  background: rgba(110, 101, 145, 0.3);
+  border-color: var(--color-text-weakest);
+}
+
+.editor-token-divider {
+  position: absolute;
+  top: 0;
+  width: 6px;
+  margin-left: -3px;
+  height: 32px;
+  cursor: ew-resize;
+  pointer-events: auto;
+}
+.editor-token-divider::after {
+  content: '';
+  position: absolute;
+  left: 2px;
+  width: 2px;
+  top: 0;
+  bottom: 0;
+  background: var(--color-accent-2);
+  opacity: 0.6;
+}
+
+.editor-playhead {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background: #ffffff;
+  box-shadow: 0 0 8px rgba(255, 255, 255, 0.8);
+  pointer-events: none;
+  z-index: 5;
+}
+
+.editor-token-menu {
+  position: fixed;
+  z-index: 50;
+  border-radius: var(--radius-input);
+  overflow: hidden;
+  min-width: 120px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.editor-token-menu-item {
+  padding: 8px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.editor-token-menu-item:hover {
+  background: rgba(242, 183, 5, 0.12);
+  color: var(--color-accent);
+}
+
+.editor-side-panel {
+  width: 320px;
+  flex-shrink: 0;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-radius: 0;
+  border-left: 1px solid var(--color-border);
+  border-top: none;
+  border-right: none;
+  border-bottom: none;
+}
+
+.editor-side-empty {
+  color: var(--color-text-weakest);
+  font-size: 13px;
+}
+
+.editor-text-input {
+  min-height: 90px;
+  resize: vertical;
+}
+
+.editor-line-time-row {
+  font-size: 12px;
+  color: var(--color-text-weak);
+}
