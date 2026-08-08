@@ -1,0 +1,5 @@
+/* Google Fonts CDN を使わず、ローカルに同梱したフォントファイルを読み込む（§6.3, オフライン要件） */
+@import url('./fraunces/fraunces.css');
+@import url('./inter/inter.css');
+@import url('./plexmono/plexmono.css');
+@import url('./notosansjp/notosansjp.css');
