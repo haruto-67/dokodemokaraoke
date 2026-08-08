@@ -1,3 +1,10 @@
+/** AudioBufferから各チャンネルのPCMデータを取り出す。Workerへtransferする前提でコピーを返す。 */
+export function extractChannelData(buffer: AudioBuffer): { channels: Float32Array[]; sampleRate: number } {
+  const channels: Float32Array[] = []
+  for (let i = 0; i < buffer.numberOfChannels; i++) channels.push(buffer.getChannelData(i).slice())
+  return { channels, sampleRate: buffer.sampleRate }
+}
+
 /** §4.12: デコード失敗時に原因が分かるメッセージを投げる */
 export async function decodeAudio(ctx: BaseAudioContext, data: ArrayBuffer): Promise<AudioBuffer> {
   try {

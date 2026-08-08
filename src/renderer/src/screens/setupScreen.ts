@@ -5,6 +5,7 @@ import { formatTime } from '../lib/dom'
 import { decodeAudio } from '../lib/audio'
 import { parseRubyLine } from '@shared/ruby'
 import { notifyError } from '../lib/projectActions'
+import { parseLyricsLines } from '../lib/lyrics'
 import type { SetupAudioFile } from '../appContext'
 
 const LENGTH_DIFF_WARN_SEC = 3
@@ -85,8 +86,7 @@ export function mountSetupScreen(container: HTMLElement, ctx: AppContext): Scree
 
   function renderPreview(): void {
     const draft = ctx.ui.getState().setupDraft
-    const rawLines = draft.lyricsText.split('\n')
-    const lines = rawLines.map((l) => (draft.removeSpaces ? l.replace(/[ 　]/g, '') : l)).filter((l) => l.trim().length > 0)
+    const lines = parseLyricsLines(draft.lyricsText, draft.removeSpaces)
     lineCountLabel.textContent = `${lines.length} 行`
 
     previewPanel.innerHTML = ''
@@ -206,8 +206,7 @@ export function mountSetupScreen(container: HTMLElement, ctx: AppContext): Scree
       notifyError('解析用（オンボーカル）の音源を指定してください。')
       return
     }
-    const rawLines = draft.lyricsText.split('\n')
-    const lines = rawLines.map((l) => (draft.removeSpaces ? l.replace(/[ 　]/g, '') : l)).filter((l) => l.trim().length > 0)
+    const lines = parseLyricsLines(draft.lyricsText, draft.removeSpaces)
     if (lines.length === 0) {
       notifyError('歌詞を1行以上入力してください。')
       return

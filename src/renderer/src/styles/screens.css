@@ -14,6 +14,28 @@
   align-items: center;
   gap: 16px;
   color: var(--color-text-weak);
+  max-width: 640px;
+  padding: 24px;
+}
+
+.analyzing-title {
+  font-family: var(--font-display);
+  font-size: 20px;
+  color: var(--color-text);
+  margin: 0;
+}
+
+.analyzing-steps {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+.analyzing-detail {
+  min-height: 16px;
+  font-size: 12px;
+  text-align: center;
 }
 
 .analyzing-spinner {
