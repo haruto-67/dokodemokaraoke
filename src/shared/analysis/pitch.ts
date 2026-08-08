@@ -171,3 +171,24 @@ export function smoothPitchTrajectory(frames: PitchFrame[], maxJumpRatio = 0.15,
   }
   return out
 }
+
+/**
+ * 有意なピッチ変化点の時刻を抽出する(§4.6.3手順3で境界候補として使う)。
+ * 半音(semitone)換算でthresholdSemitones以上の跳躍があったフレームの時刻を返す。
+ */
+export function findPitchChangePoints(frames: PitchFrame[], thresholdSemitones = 1.5): number[] {
+  const points: number[] = []
+  let lastHz: number | null = null
+  for (const f of frames) {
+    if (!f.voiced || f.hz <= 0) {
+      lastHz = null
+      continue
+    }
+    if (lastHz !== null) {
+      const semitones = Math.abs(12 * Math.log2(f.hz / lastHz))
+      if (semitones >= thresholdSemitones) points.push(f.timeSec)
+    }
+    lastHz = f.hz
+  }
+  return points
+}
