@@ -39,7 +39,8 @@ async function toOpenResult(filePath: string): Promise<OpenProjectResult> {
         : null
     },
     pitchBin: loaded.pitchBin ? bufferToArrayBuffer(loaded.pitchBin) : null,
-    onsetsBin: loaded.onsetsBin ? bufferToArrayBuffer(loaded.onsetsBin) : null
+    onsetsBin: loaded.onsetsBin ? bufferToArrayBuffer(loaded.onsetsBin) : null,
+    brokenParts: loaded.brokenParts
   }
 }
 

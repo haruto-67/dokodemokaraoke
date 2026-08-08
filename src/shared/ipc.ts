@@ -37,6 +37,7 @@ export interface OpenProjectResult {
   }
   pitchBin: ArrayBuffer | null
   onsetsBin: ArrayBuffer | null
+  brokenParts: string[]
 }
 
 export interface SaveProjectPayload {
