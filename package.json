@@ -1,0 +1,32 @@
+{
+  "name": "dokokara-karaoke",
+  "productName": "どこでもカラオケセット",
+  "version": "0.1.0",
+  "description": "手持ちの楽曲からメロディを自動解析し、自分専用のカラオケコンテンツを作成・再生するデスクトップアプリ",
+  "main": "out/main/index.js",
+  "author": "haruto",
+  "license": "UNLICENSED",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "build:unpack": "npm run build && electron-builder --dir",
+    "build:mac": "npm run build && electron-builder --mac --arm64",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "jszip": "3.10.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.2",
+    "electron": "33.2.1",
+    "electron-builder": "25.1.8",
+    "electron-vite": "2.3.0",
+    "typescript": "5.7.2",
+    "vite": "5.4.11",
+    "vitest": "2.1.8"
+  }
+}

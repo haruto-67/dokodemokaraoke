@@ -1,0 +1,39 @@
+appId: com.haruto.dokokara-karaoke
+productName: どこでもカラオケセット
+directories:
+  output: release
+  buildResources: build
+files:
+  - out/**/*
+  - package.json
+asarUnpack:
+  - "**/*.node"
+mac:
+  target:
+    - target: dmg
+      arch:
+        - arm64
+  category: public.app-category.music
+  identity: null
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  extendInfo:
+    CFBundleDocumentTypes:
+      - CFBundleTypeName: どこでもカラオケセット プロジェクト
+        CFBundleTypeRole: Editor
+        LSHandlerRank: Owner
+        LSItemContentTypes:
+          - com.haruto.dokokara-karaoke.project
+        CFBundleTypeExtensions:
+          - dokokara
+    UTExportedTypeDeclarations:
+      - UTTypeIdentifier: com.haruto.dokokara-karaoke.project
+        UTTypeDescription: どこでもカラオケセット プロジェクト
+        UTTypeConformsTo:
+          - public.zip-archive
+        UTTypeTagSpecification:
+          public.filename-extension:
+            - dokokara
+dmg:
+  sign: false
+afterPack: build/afterPack.cjs
