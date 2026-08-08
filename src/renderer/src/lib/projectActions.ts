@@ -1,6 +1,7 @@
 import type { AppContext } from '../appContext'
 import { emptySetupDraft } from '../appContext'
 import type { DokokaraProject } from '@shared/types'
+import type { OpenProjectResult } from '@shared/ipc'
 import { decodeAudio } from './audio'
 import type { EditorAudioState } from '../state/editorStore'
 
@@ -19,16 +20,16 @@ export function notifyError(message: string): void {
   window.alert(message)
 }
 
-export async function openProjectByPath(ctx: AppContext, filePath: string): Promise<void> {
-  let result
-  try {
-    result = await window.dokokara.openProjectPath(filePath)
-  } catch (e) {
-    notifyError(`プロジェクトを開けませんでした: ${(e as Error).message}`)
-    return
-  }
-  if (!result) return
-
+/**
+ * 読み込み結果(OpenProjectResult)をエディタ状態へ反映する共通処理。
+ * @param editorFilePath 履歴上の保存先パス。既定は result.filePath だが、
+ *   クラッシュバックアップ復元時は「元のプロジェクトパス」を渡し、⌘S で元ファイルへ上書きできるようにする。
+ */
+async function applyOpenResult(
+  ctx: AppContext,
+  result: OpenProjectResult,
+  editorFilePath: string = result.filePath
+): Promise<void> {
   if (result.brokenParts.length > 0) {
     notifyError(
       `プロジェクトファイルの一部が破損していたため、以下の項目を読み込めませんでした:\n${result.brokenParts.join(', ')}`
@@ -64,12 +65,50 @@ export async function openProjectByPath(ctx: AppContext, filePath: string): Prom
   const pitchHz = result.pitchBin ? new Float32Array(result.pitchBin) : null
   const onsetsSec = result.onsetsBin ? new Float32Array(result.onsetsBin) : null
 
-  ctx.editor.loadProject(filePath, json, pitchHz, onsetsSec, audioState)
+  ctx.editor.loadProject(editorFilePath, json, pitchHz, onsetsSec, audioState)
   ctx.playback.setBuffer(
     json.playback.defaultSource === 'analysis' ? audioState.analysisBuffer : audioState.playbackBuffer ?? audioState.analysisBuffer
   )
-  rememberRecent(filePath)
+  rememberRecent(editorFilePath)
   ctx.navigate('editor')
+}
+
+export async function openProjectByPath(ctx: AppContext, filePath: string): Promise<void> {
+  let result
+  try {
+    result = await window.dokokara.openProjectPath(filePath)
+  } catch (e) {
+    notifyError(`プロジェクトを開けませんでした: ${(e as Error).message}`)
+    return
+  }
+  if (!result) return
+  await applyOpenResult(ctx, result)
+}
+
+/** ⌘O: ダイアログでプロジェクトファイルを選んで開く */
+export async function openProjectDialogFlow(ctx: AppContext): Promise<void> {
+  let result: OpenProjectResult | null
+  try {
+    result = await window.dokokara.openProjectDialog()
+  } catch (e) {
+    notifyError(`プロジェクトを開けませんでした: ${(e as Error).message}`)
+    return
+  }
+  if (!result) return
+  await applyOpenResult(ctx, result)
+}
+
+/** §4.1: クラッシュ後の復帰。バックアップの内容を「元のプロジェクトパス」に紐づけて読み込む。 */
+export async function restoreFromBackup(ctx: AppContext, originalFilePath: string, backupPath: string): Promise<void> {
+  let result
+  try {
+    result = await window.dokokara.openProjectPath(backupPath)
+  } catch (e) {
+    notifyError(`バックアップの復元に失敗しました: ${(e as Error).message}`)
+    return
+  }
+  if (!result) return
+  await applyOpenResult(ctx, result, originalFilePath)
 }
 
 export function createNewProjectFlow(ctx: AppContext): void {

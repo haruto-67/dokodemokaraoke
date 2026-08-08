@@ -1,0 +1,178 @@
+.setup-screen {
+  flex: 1;
+  overflow-y: auto;
+  padding: 32px 56px 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  max-width: 920px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.setup-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.setup-title {
+  font-family: var(--font-display);
+  font-size: 24px;
+  margin: 0;
+}
+
+.setup-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.setup-row input[type='text'] {
+  max-width: 420px;
+}
+
+.setup-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-weak);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.setup-dropzones {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.dropzone {
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px dashed var(--color-border);
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+
+.dropzone.dragover {
+  border-color: var(--color-accent);
+  background: rgba(242, 183, 5, 0.06);
+}
+
+.dropzone.has-file {
+  border-style: solid;
+  border-color: rgba(242, 183, 5, 0.4);
+}
+
+.dropzone-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.dropzone-desc {
+  font-size: 12px;
+  color: var(--color-text-weak);
+}
+
+.dropzone-info {
+  font-size: 12px;
+  color: var(--color-accent);
+  min-height: 16px;
+}
+
+.dropzone-progress {
+  font-size: 12px;
+  color: var(--color-text-weak);
+}
+
+.dropzone .btn {
+  align-self: flex-start;
+}
+
+.setup-warning {
+  padding: 10px 14px;
+  border-radius: var(--radius-input);
+  background: rgba(239, 93, 116, 0.12);
+  border: 1px solid rgba(239, 93, 116, 0.4);
+  color: var(--color-accent-2);
+  font-size: 13px;
+}
+
+.setup-lyrics {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.setup-lyrics-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.setup-lyrics-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.setup-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--color-text-weak);
+}
+
+.setup-line-count {
+  font-size: 12px;
+  color: var(--color-text-weak);
+}
+
+.setup-screen textarea {
+  min-height: 260px;
+  resize: vertical;
+  line-height: 1.7;
+}
+
+.setup-preview-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-weak);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.setup-preview {
+  padding: 14px 16px;
+  max-height: 220px;
+  overflow-y: auto;
+  font-family: var(--font-lyrics);
+}
+
+.setup-preview-empty {
+  color: var(--color-text-weakest);
+  font-size: 13px;
+  margin: 0;
+}
+
+.setup-preview-line {
+  margin: 0 0 6px;
+  line-height: 2;
+}
+
+.setup-preview-line ruby rt {
+  color: var(--color-text-weak);
+  font-size: 0.6em;
+}
+
+.setup-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 8px;
+}
+
+.setup-start-btn {
+  min-width: 200px;
+}

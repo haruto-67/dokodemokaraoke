@@ -1,0 +1,87 @@
+/* 解析中・編集・本番の各画面。詳細実装までの共通プレースホルダースタイル。 */
+
+.analyzing-screen,
+.perform-screen {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.analyzing-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  color: var(--color-text-weak);
+}
+
+.analyzing-spinner {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 3px solid var(--color-border);
+  border-top-color: var(--color-accent);
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.analyzing-label {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.editor-screen {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.editor-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.editor-title {
+  flex: 1;
+  font-family: var(--font-display);
+  font-size: 18px;
+  margin: 0;
+}
+
+.editor-body {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.editor-placeholder {
+  color: var(--color-text-weak);
+}
+
+.perform-screen {
+  position: relative;
+  flex-direction: column;
+}
+
+.perform-back {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+}
+
+.perform-placeholder {
+  font-family: var(--font-display);
+  font-size: 22px;
+  color: var(--color-text-weak);
+}

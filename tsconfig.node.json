@@ -11,6 +11,7 @@
     "resolveJsonModule": true,
     "noUnusedLocals": false,
     "noUnusedParameters": false,
+    "baseUrl": ".",
     "paths": {
       "@shared/*": ["src/shared/*"]
     }
