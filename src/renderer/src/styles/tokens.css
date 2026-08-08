@@ -1,0 +1,189 @@
+/* デザイントークン（要件定義書 §6） */
+:root {
+  /* カラーパレット §6.1 */
+  --color-bg: #150f26;
+  --color-panel: #1f1737;
+  --color-panel-2: #251c40;
+  --color-border: rgba(201, 194, 223, 0.14);
+  --color-accent: #f2b705;
+  --color-accent-2: #ef5d74;
+  --color-text: #f5f1ff;
+  --color-text-weak: #9c93bf;
+  --color-text-weakest: #6e6591;
+
+  /* タイポグラフィ §6.2 */
+  --font-display: 'Fraunces', 'Noto Sans JP', serif;
+  --font-body: 'Inter', 'Noto Sans JP', sans-serif;
+  --font-mono: 'IBM Plex Mono', 'Noto Sans JP', monospace;
+  --font-lyrics: 'Noto Sans JP', 'Fraunces', sans-serif;
+
+  /* 角丸 §6.4 */
+  --radius-card: 14px;
+  --radius-input: 8px;
+
+  /* シャドウ・グロー */
+  --glow-accent: 0 0 24px rgba(242, 183, 5, 0.35);
+  --glow-accent-2: 0 0 24px rgba(239, 93, 116, 0.35);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+body {
+  background-image:
+    radial-gradient(ellipse 900px 600px at -5% -10%, rgba(242, 183, 5, 0.12), transparent 60%),
+    radial-gradient(ellipse 900px 600px at 105% -10%, rgba(239, 93, 116, 0.12), transparent 60%);
+  background-attachment: fixed;
+}
+
+#app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+input,
+textarea,
+select {
+  user-select: text;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(201, 194, 223, 0.2);
+  border-radius: 8px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(201, 194, 223, 0.35);
+}
+
+a {
+  color: inherit;
+}
+
+button {
+  font-family: var(--font-body);
+}
+
+/* プライマリボタン: ゴールドのグラデーション＋グロー影。ホバーで1px浮き上がる */
+.btn {
+  appearance: none;
+  border-radius: var(--radius-input);
+  border: 1px solid transparent;
+  padding: 10px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, #ffd85e, var(--color-accent));
+  color: #241a02;
+  box-shadow: var(--glow-accent);
+}
+.btn-primary:hover {
+  transform: translateY(-1px);
+}
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+/* ゴーストボタン: 透明背景＋境界線。ホバーでゴールドの境界色 */
+.btn-ghost {
+  background: transparent;
+  color: var(--color-text);
+  border-color: var(--color-border);
+}
+.btn-ghost:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.btn-danger {
+  background: transparent;
+  color: var(--color-accent-2);
+  border-color: rgba(239, 93, 116, 0.4);
+}
+.btn-danger:hover {
+  border-color: var(--color-accent-2);
+  background: rgba(239, 93, 116, 0.1);
+}
+
+.panel {
+  background: var(--color-panel);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+}
+
+.panel-2 {
+  background: var(--color-panel-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+}
+
+/* ステップインジケータ §6.4: モノスペース・大文字・ピル形状。現在ステップはゴールド */
+.step-pill {
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-weak);
+}
+.step-pill.active {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  background: rgba(242, 183, 5, 0.1);
+}
+.step-pill.done {
+  color: var(--color-text);
+  border-color: rgba(201, 194, 223, 0.3);
+}
+
+input[type='text'],
+input[type='number'],
+input[type='search'],
+textarea {
+  background: var(--color-panel-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-input);
+  color: var(--color-text);
+  padding: 8px 10px;
+  font-family: var(--font-body);
+  font-size: 13px;
+}
+input[type='text']:focus,
+input[type='number']:focus,
+input[type='search']:focus,
+textarea:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
