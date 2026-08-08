@@ -18,6 +18,7 @@ const api: DokokaraApi = {
   readFileBuffer: (filePath: string) => ipcRenderer.invoke(IPC.readFileBuffer, filePath),
   readTextFile: (filePath: string) => ipcRenderer.invoke(IPC.readTextFile, filePath),
   pickTextFile: () => ipcRenderer.invoke(IPC.pickTextFile),
+  pickDirectory: () => ipcRenderer.invoke(IPC.pickDirectory),
   getSettings: (): Promise<AppSettings> => ipcRenderer.invoke(IPC.getSettings),
   setSettings: (settings: Partial<AppSettings>) => ipcRenderer.invoke(IPC.setSettings, settings),
   getLogs: () => ipcRenderer.invoke(IPC.getLogs),

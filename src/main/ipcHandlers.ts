@@ -160,6 +160,14 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
     return readFile(result.filePaths[0], 'utf-8')
   })
 
+  ipcMain.handle(IPC.pickDirectory, async () => {
+    const win = getWindow()
+    if (!win) return null
+    const result = await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'] })
+    if (result.canceled || result.filePaths.length === 0) return null
+    return result.filePaths[0]
+  })
+
   ipcMain.handle(IPC.getSettings, async () => loadSettings())
   ipcMain.handle(IPC.setSettings, async (_e, partial) => saveSettings(partial))
 

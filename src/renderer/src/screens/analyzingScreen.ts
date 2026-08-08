@@ -148,6 +148,7 @@ export function mountAnalyzingScreen(container: HTMLElement, ctx: AppContext): S
     const playbackAudio = draft.playbackAudio
 
     const project: DokokaraProject = createEmptyProject(draft.projectName || '無題のプロジェクト')
+    project.playback.defaultSource = ctx.settings.getState().defaultPerformSource
     project.audio.analysis = {
       originalFileName: analysisAudio.fileName,
       path: `audio/vocal${analysisAudio.ext}`,

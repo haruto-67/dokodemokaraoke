@@ -80,7 +80,8 @@ export function createEditorStore() {
       zoom: 1,
       scrollSec: 0,
       playheadSec: 0,
-      isPlaying: false
+      isPlaying: false,
+      playSource: project.playback.defaultSource
     })
     history = new HistoryManager<DokokaraLine[]>(project.lyrics)
   }

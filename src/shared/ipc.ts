@@ -16,6 +16,7 @@ export const IPC = {
   readFileBuffer: 'file:readBuffer',
   readTextFile: 'file:readText',
   pickTextFile: 'file:pickText',
+  pickDirectory: 'dir:pick',
   checkCrashBackup: 'project:checkCrashBackup',
   getSettings: 'settings:get',
   setSettings: 'settings:set',
@@ -65,6 +66,7 @@ export interface DokokaraApi {
   readFileBuffer(filePath: string): Promise<ArrayBuffer>
   readTextFile(filePath: string): Promise<string>
   pickTextFile(): Promise<string | null>
+  pickDirectory(): Promise<string | null>
   getSettings(): Promise<AppSettings>
   setSettings(settings: Partial<AppSettings>): Promise<AppSettings>
   getLogs(): Promise<string[]>

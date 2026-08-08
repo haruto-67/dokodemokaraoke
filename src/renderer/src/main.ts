@@ -4,8 +4,10 @@ import './styles/setup.css'
 import './styles/screens.css'
 import './styles/editor.css'
 import './styles/perform.css'
+import './styles/settings.css'
 import { createAppContext } from './appContext'
 import { createRouter } from './app'
+import { mountSettingsModal } from './components/settingsModal'
 import {
   saveProject,
   backupProject,
@@ -25,6 +27,7 @@ async function bootstrap(): Promise<void> {
   const ctx = createAppContext(settings)
 
   createRouter(root, ctx)
+  mountSettingsModal(root, ctx)
 
   // ネイティブメニュー(menu.ts)からのアクション(§4.9.2 ファイル操作・Undo/Redo と対応)
   window.dokokara.onMenuAction((action) => {
@@ -75,10 +78,14 @@ async function bootstrap(): Promise<void> {
     })()
   })
 
-  // 自動バックアップ(§4.1, 既定3分)
-  window.setInterval(() => {
-    void backupProject(ctx)
-  }, ctx.settings.getState().autoBackupIntervalMs)
+  // 自動バックアップ(§4.1, 既定3分)。setIntervalではなく自己再スケジュールのsetTimeoutにすることで、
+  // 設定画面で間隔を変更した場合に次回発火から即座に新しい値が反映される。
+  function scheduleAutoBackup(): void {
+    window.setTimeout(() => {
+      void backupProject(ctx).finally(scheduleAutoBackup)
+    }, ctx.settings.getState().autoBackupIntervalMs)
+  }
+  scheduleAutoBackup()
 
   // クラッシュ後の復帰提案(§4.1)
   try {
