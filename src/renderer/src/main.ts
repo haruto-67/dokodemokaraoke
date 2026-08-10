@@ -19,6 +19,19 @@ import {
   notifyError
 } from './lib/projectActions'
 
+// 画面遷移中などの未捕捉エラーは、これまで真っ暗な画面のまま何も表示されずに
+// 失敗していた(コンソールにしか出ない)。原因を利用者が報告できるよう、
+// 未捕捉の例外・Promise rejectionをダイアログで可視化する。
+window.addEventListener('error', (e) => {
+  console.error(e.error ?? e.message)
+  notifyError(`予期しないエラーが発生しました: ${e.message}`)
+})
+window.addEventListener('unhandledrejection', (e) => {
+  console.error(e.reason)
+  const message = e.reason instanceof Error ? e.reason.message : String(e.reason)
+  notifyError(`予期しないエラーが発生しました: ${message}`)
+})
+
 async function bootstrap(): Promise<void> {
   const root = document.getElementById('app')
   if (!root) throw new Error('#app 要素が見つかりません')

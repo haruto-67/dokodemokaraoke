@@ -28,8 +28,20 @@ export function createRouter(root: HTMLElement, ctx: AppContext): () => void {
     current?.unmount()
     root.classList.remove(...Array.from(root.classList).filter((c) => c.startsWith('screen-')))
     root.classList.add(`screen-${screen}`)
-    current = SCREEN_MOUNTS[screen](root, ctx)
-    currentScreen = screen
+    try {
+      current = SCREEN_MOUNTS[screen](root, ctx)
+      currentScreen = screen
+    } catch (e) {
+      // 画面マウント中の例外を捕捉せずにいると、真っ暗な画面のまま何も表示されなくなる。
+      // せめてエラー内容が分かるようにフォールバック表示を出す。
+      console.error(e)
+      current = null
+      currentScreen = null
+      const fallback = document.createElement('div')
+      fallback.style.cssText = 'padding:32px;color:#F5F1FF;font-family:monospace;white-space:pre-wrap;'
+      fallback.textContent = `画面の表示に失敗しました:\n${e instanceof Error ? (e.stack ?? e.message) : String(e)}`
+      root.appendChild(fallback)
+    }
   }
 
   render(ctx.ui.getState().screen)
