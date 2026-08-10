@@ -32,12 +32,12 @@ export function mountSetupScreen(container: HTMLElement, ctx: AppContext): Scree
   ])
 
   // --- 音源ドロップゾーン (§4.3) ---
+  const lengthWarning = el('div', { className: 'setup-warning', style: { display: 'none' } as unknown as CSSStyleDeclaration })
+
   const dropZones = el('div', { className: 'setup-dropzones' })
   const analysisZone = createDropZone('解析用（オンボーカル・必須）', 'ボーカルを含む通常の音源。ピッチ検出に使用します。', 'analysis')
   const playbackZone = createDropZone('再生用（オフボーカル・任意）', '伴奏のみの音源。未指定の場合は解析用を再生にも流用します。', 'playback')
   dropZones.append(analysisZone.el, playbackZone.el)
-
-  const lengthWarning = el('div', { className: 'setup-warning', style: { display: 'none' } as unknown as CSSStyleDeclaration })
 
   // --- 歌詞入力 (§4.5) ---
   const lyricsSection = el('div', { className: 'setup-lyrics' })
