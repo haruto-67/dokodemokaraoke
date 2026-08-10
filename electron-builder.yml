@@ -1,5 +1,9 @@
 appId: com.haruto.dokokara-karaoke
 productName: どこでもカラオケセット
+# .app本体の表示名(productName)は日本語のままにしたいが、Contents/MacOS/内の
+# 実行ファイル名が非ASCIIだとApple Silicon実機でV8初期化中にSIGTRAPクラッシュする
+# ことを確認したため、実行ファイル名だけASCIIにする(electron-builderのexecutableName)。
+executableName: DokokaraKaraoke
 directories:
   output: release
   buildResources: build
@@ -36,4 +40,20 @@ mac:
             - dokokara
 dmg:
   sign: false
-afterPack: build/afterPack.cjs
+# electron-builderはelectron fusesの書き込みをafterPack "の後"に行うため、
+# afterPackで署名するとfuses書き込み時にバイナリが変更され署名が壊れる(実機で確認済み)。
+# fuses書き込み後に確実に走るafterSignで署名する。
+afterSign: build/afterSign.cjs
+# electron-builderが既定で有効化するElectron Fuses(embeddedAsarIntegrityValidation等)が、
+# 実機でSIGTRAPクラッシュを引き起こすことを検証で確認したため無効化する。
+# ad-hoc署名かつ2名限定配布のためasar改ざん検知等のハードニングは必須ではない。
+electronFuses:
+  runAsNode: false
+  enableCookieEncryption: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: false
+  onlyLoadAppFromAsar: false
+  loadBrowserProcessSpecificV8Snapshot: false
+  grantFileProtocolExtraPrivileges: false
+  resetAdHocDarwinSignature: true
