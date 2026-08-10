@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    # ネイティブ依存(@electron/rebuild)や.icns変換など、macOS arm64固有の挙動を検証するためmacos-14を使用
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run typecheck
+
+      - run: npm run test
+
+      - name: DMGビルド検証(実機での起動確認は別途手動で行う)
+        run: npm run build:mac
+
+      - name: ビルド成果物をartifactとして保存(GitHub Releasesへは公開しない)
+        uses: actions/upload-artifact@v4
+        with:
+          name: dokokara-karaoke-dmg
+          path: release/*.dmg
+          retention-days: 14
