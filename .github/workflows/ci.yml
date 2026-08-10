@@ -24,7 +24,9 @@ jobs:
       - run: npm run test
 
       - name: DMGビルド検証(実機での起動確認は別途手動で行う)
-        run: npm run build:mac
+        # electron-builderはCI環境を検知すると既定でGitHub Releasesへの公開を試みるため、
+        # --publish=neverで明示的に無効化する(公開は引き続き手動のgh release uploadで行う)
+        run: npm run build:mac -- --publish=never
 
       - name: ビルド成果物をartifactとして保存(GitHub Releasesへは公開しない)
         uses: actions/upload-artifact@v4
