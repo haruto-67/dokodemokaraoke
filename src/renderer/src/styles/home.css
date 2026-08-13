@@ -11,6 +11,13 @@
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
+  -webkit-app-region: drag;
+}
+
+.home-header button,
+.home-header input,
+.home-header a {
+  -webkit-app-region: no-drag;
 }
 
 .home-title {

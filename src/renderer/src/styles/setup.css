@@ -14,6 +14,13 @@
   display: flex;
   align-items: center;
   gap: 16px;
+  -webkit-app-region: drag;
+}
+
+.setup-header button,
+.setup-header input,
+.setup-header a {
+  -webkit-app-region: no-drag;
 }
 
 .setup-title {

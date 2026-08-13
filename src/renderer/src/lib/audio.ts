@@ -11,7 +11,7 @@ export async function decodeAudio(ctx: BaseAudioContext, data: ArrayBuffer): Pro
     return await ctx.decodeAudioData(data.slice(0))
   } catch {
     throw new Error(
-      '音声ファイルのデコードに失敗しました。非対応の形式か、ファイルが破損している可能性があります（対応形式: wav / mp3 / m4a / flac）。'
+      '音声ファイルのデコードに失敗しました。非対応の形式か、ファイルが破損している可能性があります（対応形式: wav / mp3 / m4a / flac / aac / ogg）。'
     )
   }
 }
