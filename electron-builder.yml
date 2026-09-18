@@ -38,6 +38,16 @@ mac:
         UTTypeTagSpecification:
           public.filename-extension:
             - dokokara
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: build/icon.ico
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
 dmg:
   sign: false
 # electron-builderはelectron fusesの書き込みをafterPack "の後"に行うため、
