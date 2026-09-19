@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { runSignalAnalysis, assignLyricsTiming } from './pipeline'
-import { musicalSignal, whiteNoise, sineWave } from './testSignals'
+import { sineWave } from './testSignals'
 import type { AnalysisStepProgress } from '../types'
 
 const SAMPLE_RATE = 22050
@@ -24,32 +24,16 @@ describe('runSignalAnalysis', () => {
     expect(alignmentEvents.some((p) => p.status === 'skipped')).toBe(true)
   })
 
-  it('オフボーカルが伴奏として与えられると差分ボーカル抽出が使われる', () => {
+  it('playbackが指定されていても無視され、常にvocalIsolationはnone扱いになる(v3ではPythonサイドカーが分離を担当)', () => {
     const n = SAMPLE_RATE * 2
-    const accompaniment = musicalSignal(n, SAMPLE_RATE, 1)
-    const vocal = sineWave(n, 440, SAMPLE_RATE, 0.5)
-    const analysisSignal = new Float32Array(n)
-    for (let i = 0; i < n; i++) analysisSignal[i] = accompaniment[i] + vocal[i]
+    const signal = sineWave(n, 220, SAMPLE_RATE)
 
     const result = runSignalAnalysis({
-      analysis: { channels: [analysisSignal], sampleRate: SAMPLE_RATE },
-      playback: { channels: [accompaniment], sampleRate: SAMPLE_RATE }
+      analysis: { channels: [signal], sampleRate: SAMPLE_RATE },
+      playback: { channels: [signal], sampleRate: SAMPLE_RATE }
     })
 
     expect(result.alignmentOffsetSamples).toBe(0)
-    expect(result.vocalIsolationUsed).toBe('difference')
-  })
-
-  it('別マスター相当(無相関)のオフボーカルが渡された場合、アライメント不能としてSTEP2をスキップする', () => {
-    const n = SAMPLE_RATE * 2
-    const analysisSignal = musicalSignal(n, SAMPLE_RATE, 1)
-    const unrelatedPlayback = whiteNoise(n, 999)
-
-    const result = runSignalAnalysis({
-      analysis: { channels: [analysisSignal], sampleRate: SAMPLE_RATE },
-      playback: { channels: [unrelatedPlayback], sampleRate: SAMPLE_RATE }
-    })
-
     expect(result.vocalIsolationUsed).toBe('none')
   })
 

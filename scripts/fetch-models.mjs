@@ -45,6 +45,7 @@ async function main() {
 
   for (const model of manifest.models) {
     const destPath = join(MODELS_DIR, model.filename)
+    mkdirSync(dirname(destPath), { recursive: true })
 
     if (isValid(destPath, model)) {
       console.log(`[skip] ${model.filename} は既に検証済み`)

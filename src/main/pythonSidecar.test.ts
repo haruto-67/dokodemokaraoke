@@ -47,12 +47,12 @@ describe('PythonSidecar', () => {
     const result = await sidecar.request({
       id: 'job-1',
       method: 'analyze',
-      params: { sourceAudioPath: '/tmp/source.wav', lyricsLines: ['今日は晴れ'], totalDurationSec: 120 }
+      params: { sourceAudioPath: '/tmp/source.wav', lyricsLines: ['今日は晴れ'], totalDurationSec: 120, workDir: '/tmp' }
     })
 
     expect(result).toEqual({
       ok: true,
-      params: { sourceAudioPath: '/tmp/source.wav', lyricsLines: ['今日は晴れ'], totalDurationSec: 120 }
+      params: { sourceAudioPath: '/tmp/source.wav', lyricsLines: ['今日は晴れ'], totalDurationSec: 120, workDir: '/tmp' }
     })
     expect(progressEvents).toHaveLength(1)
     expect((progressEvents[0] as { progress: { id: string } }).progress.id).toBe('pitch')
@@ -75,7 +75,7 @@ describe('PythonSidecar', () => {
       sidecar.request({
         id: 'job-2',
         method: 'analyze',
-        params: { sourceAudioPath: '/tmp/source.wav', lyricsLines: [], totalDurationSec: 1 }
+        params: { sourceAudioPath: '/tmp/source.wav', lyricsLines: [], totalDurationSec: 1, workDir: '/tmp' }
       })
     ).rejects.toThrow('解析に失敗しました')
 
@@ -127,7 +127,7 @@ describe('PythonSidecar', () => {
     })
     sidecar.start()
 
-    const result = await sidecar.request({ id: 'job-env', method: 'analyze', params: { sourceAudioPath: '', lyricsLines: [], totalDurationSec: 0 } })
+    const result = await sidecar.request({ id: 'job-env', method: 'analyze', params: { sourceAudioPath: '', lyricsLines: [], totalDurationSec: 0, workDir: '/tmp' } })
 
     expect(result).toEqual({ modelsDir: '/tmp/dokokara-models-test' })
     sidecar.stop()

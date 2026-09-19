@@ -19,7 +19,8 @@
     "build:win": "npm run build && electron-builder --win --x64",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:python": "resources/python-runtime/bin/python3 -m unittest discover -s python/sidecar -p '*_test.py' -v"
   },
   "dependencies": {
     "jszip": "3.10.1"

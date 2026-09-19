@@ -1,7 +1,5 @@
 // 解析パイプライン全体のオーケストレーション(要件定義書 §4.4 STEP1〜8)
-import { estimateAlignment } from './align'
-import { extractDifferenceVocal } from './vocalIsolation'
-import { toMono, resampleLinear, preprocess } from './preprocess'
+import { toMono, preprocess } from './preprocess'
 import {
   detectPitchYin,
   correctOctaveErrors,
@@ -72,63 +70,22 @@ export function runSignalAnalysis(input: RunAnalysisInput, onProgress?: Progress
 
   const sourceSampleRate = input.analysis.sampleRate
   const analysisMono = toMono(input.analysis.channels)
-  const hasPlayback = input.playback !== null
 
-  // STEP1: 時間軸アライメント
-  let alignmentOffsetSamples = 0
-  let alignable = false
-  let playbackMonoAtAnalysisRate: Float32Array | null = null
-
-  if (hasPlayback) {
-    report(onProgress, 'alignment', 'running', 0)
-    const start = now()
-    const playbackMono = toMono(input.playback!.channels)
-    playbackMonoAtAnalysisRate =
-      input.playback!.sampleRate === sourceSampleRate
-        ? playbackMono
-        : resampleLinear(playbackMono, input.playback!.sampleRate, sourceSampleRate)
-    const result = estimateAlignment(analysisMono, playbackMonoAtAnalysisRate, sourceSampleRate)
-    alignmentOffsetSamples = result.offsetSamples
-    alignable = result.alignable
-    logStep('alignment', start, `confidence=${result.confidence.toFixed(2)} alignable=${alignable}`)
-    report(onProgress, 'alignment', 'done', 1, alignable ? undefined : '相関のピークが不明瞭なため別マスターの可能性があります')
-  } else {
-    report(onProgress, 'alignment', 'skipped', 1, 'オフボーカル未指定')
-  }
-
-  // STEP2: 差分ボーカル抽出
-  let isolatedSignal: Float32Array | null = null
-  let isolatedStartIndex = 0
-  let vocalIsolationUsed: VocalIsolationMethod = 'none'
-
-  if (hasPlayback && alignable && playbackMonoAtAnalysisRate) {
-    report(onProgress, 'vocalIsolation', 'running', 0)
-    const start = now()
-    const iso = extractDifferenceVocal(analysisMono, playbackMonoAtAnalysisRate, alignmentOffsetSamples)
-    logStep('vocalIsolation', start, `residualRatio=${iso.residualRatio.toFixed(2)} used=${iso.used}`)
-    if (iso.used) {
-      isolatedSignal = iso.signal
-      isolatedStartIndex = iso.startIndex
-      vocalIsolationUsed = 'difference'
-    }
-    report(onProgress, 'vocalIsolation', 'done', 1, iso.used ? undefined : '打ち消しが不十分なためオンボーカルにフォールバックします')
-  } else {
-    report(onProgress, 'vocalIsolation', 'skipped', 1)
-  }
+  // STEP1/STEP2(v2): 時間軸アライメント・差分ボーカル抽出。
+  // v3ではボーカル分離をPythonサイドカー側のMel-Band RoFormerで行う([[どこカラv3の技術選定]])ため、
+  // このJS実装(align.ts/vocalIsolation.ts、2ファイル手入力前提)は撤去済み。準備画面が
+  // オフボーカルを渡すことはもう無いが、AnalysisStepId自体はv3側との共有型のためstep自体は残す。
+  const alignmentOffsetSamples = 0
+  const vocalIsolationUsed: VocalIsolationMethod = 'none'
+  report(onProgress, 'alignment', 'skipped', 1, 'v3ではPythonサイドカーが分離を担当')
+  report(onProgress, 'vocalIsolation', 'skipped', 1, 'v3ではPythonサイドカーが分離を担当')
 
   // STEP3: 前処理(モノラル化は既に完了しているためリサンプル・ハイパスのみ)
   report(onProgress, 'preprocess', 'running', 0)
   const preStart = now()
-  const sourceSignal = isolatedSignal ?? analysisMono
-  const { signal: processedSignal, sampleRate: processedSampleRate } = preprocess([sourceSignal], sourceSampleRate)
+  const { signal: processedSignal, sampleRate: processedSampleRate } = preprocess([analysisMono], sourceSampleRate)
   logStep('preprocess', preStart, `sampleRate=${processedSampleRate}`)
   report(onProgress, 'preprocess', 'done', 1)
-
-  // 差分抽出により信号の先頭が欠けている場合、以降の時刻はすべて analysis 音源のタイムラインに
-  // 揃うようシフトする(§4.11のような表示系オフセットではなく、解析上の欠損を補うためのもの)。
-  // pitch.bin は index*hopSec で時刻を復元する仕様(§7.3)のため、欠けた先頭分は無声フレームで埋める。
-  const leadingSilentFrames = Math.round(isolatedStartIndex / sourceSampleRate / HOP_SEC)
-  const frameOffsetSec = leadingSilentFrames * HOP_SEC
 
   // STEP4: ピッチ検出
   report(onProgress, 'pitch', 'running', 0)
@@ -137,23 +94,13 @@ export function runSignalAnalysis(input: RunAnalysisInput, onProgress?: Progress
   frames = correctOctaveErrors(frames)
   frames = medianFilter(frames)
   frames = smoothPitchTrajectory(frames)
-  if (leadingSilentFrames > 0) {
-    const padding: PitchFrame[] = Array.from({ length: leadingSilentFrames }, (_, i) => ({
-      timeSec: i * HOP_SEC,
-      hz: 0,
-      voiced: false
-    }))
-    frames = [...padding, ...frames.map((f) => ({ ...f, timeSec: f.timeSec + frameOffsetSec }))]
-  }
   logStep('pitch', pitchStart, `frames=${frames.length}`)
   report(onProgress, 'pitch', 'done', 1)
 
   // STEP5: オンセット検出(ピッチ検出と同じ前処理済み信号・タイムベースを使う)
   report(onProgress, 'onset', 'running', 0)
   const onsetStart = now()
-  const rawOnsets = detectOnsets(processedSignal, processedSampleRate)
-  const onsetsSec = new Float32Array(rawOnsets.length)
-  for (let i = 0; i < rawOnsets.length; i++) onsetsSec[i] = rawOnsets[i] + frameOffsetSec
+  const onsetsSec = detectOnsets(processedSignal, processedSampleRate)
   logStep('onset', onsetStart, `count=${onsetsSec.length}`)
   report(onProgress, 'onset', 'done', 1)
 

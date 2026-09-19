@@ -1,4 +1,7 @@
 import { randomUUID } from 'node:crypto'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { ipcMain, type BrowserWindow } from 'electron'
 import {
   IPC,
@@ -42,6 +45,7 @@ const jobs = new Map<string, Job>()
 export function registerAnalysisHandlers(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle(IPC.startAnalysis, async (_e, params: AnalysisStartParams): Promise<AnalysisStartResult> => {
     const jobId = randomUUID()
+    const workDir = await mkdtemp(join(tmpdir(), 'dokokara-analysis-'))
     const sidecar = new PythonSidecar(getPythonExecutablePath(), [getPythonSidecarScriptPath()], {
       env: buildSidecarEnv(),
       onProgress: (_id, progress) => {
@@ -53,7 +57,7 @@ export function registerAnalysisHandlers(getWindow: () => BrowserWindow | null):
     sidecar.start()
 
     sidecar
-      .request({ id: jobId, method: 'analyze', params })
+      .request({ id: jobId, method: 'analyze', params: { ...params, workDir } })
       .then((result) => {
         const event: AnalysisDoneEvent = { jobId, result }
         getWindow()?.webContents.send(IPC.onAnalysisDone, event)
@@ -61,6 +65,10 @@ export function registerAnalysisHandlers(getWindow: () => BrowserWindow | null):
       .catch((error: Error) => {
         const event: AnalysisErrorEvent = { jobId, message: error.message }
         getWindow()?.webContents.send(IPC.onAnalysisError, event)
+        // 失敗時は中間生成物ごと掃除する。成功時はvocals/instrumental等を
+        // 後続処理(プロジェクト保存時のコピー等)が参照するためworkDirを残す
+        // (sourceIngestCore.tsの「成功時は消さない」方針と同じ理由)。
+        void rm(workDir, { recursive: true, force: true })
       })
       .finally(() => {
         sidecar.stop()

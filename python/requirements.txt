@@ -17,3 +17,11 @@ transformers==5.17.0
 # 実測済み)。バックエンドが必要になった場合は `basic-pitch[onnx]` 等に
 # 差し替えを検討する。
 basic-pitch==0.4.0
+
+# ボーカル/伴奏分離(§4.4.2 STEP2)。Kimberley Jensen版Mel-Band RoFormer
+# チェックポイントの推論のみを提供する軽量パッケージ(MIT)。同梱チェックポイント
+# (resources/models/melband-roformer-kim-vocals/)をmodels_dirに直接渡すことで、
+# ダウンロード・~/.cache参照を一切行わずオフラインで動作する。
+# アーキテクチャ用YAML設定(config_vocals_mel_band_roformer.yaml)はパッケージに
+# 同梱されており別途取得不要。
+melband-roformer-infer==0.1.5

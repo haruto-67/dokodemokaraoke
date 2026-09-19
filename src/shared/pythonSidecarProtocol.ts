@@ -12,6 +12,8 @@ export interface AnalyzeParams {
   sourceAudioPath: string
   lyricsLines: string[]
   totalDurationSec: number
+  /** STEP2以降の中間生成物(vocals/instrumental等)を書き出す作業ディレクトリ。呼び出し側(analysisManager.ts)がジョブごとに用意する */
+  workDir: string
 }
 
 /** メイン → サイドカー(stdin) */

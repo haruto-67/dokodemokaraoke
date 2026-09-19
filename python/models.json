@@ -2,8 +2,8 @@
   "release": "https://github.com/haruto-67/dokodemokaraoke/releases/tag/model-weights-v1",
   "models": [
     {
-      "filename": "MelBandRoformer.ckpt",
-      "description": "ボーカル分離 (Mel-Band RoFormer, Kimberley Jensen版, MIT)",
+      "filename": "melband-roformer-kim-vocals/MelBandRoformer.ckpt",
+      "description": "ボーカル分離 (Mel-Band RoFormer, Kimberley Jensen版, CC-BY-NC-SA-4.0)。melband-roformer-inferパッケージが期待するmodels_dir配下のパス(<slug>/<filename>)にそのまま合わせている",
       "url": "https://github.com/haruto-67/dokodemokaraoke/releases/download/model-weights-v1/MelBandRoformer.ckpt",
       "size": 913106900,
       "sha256": "87201f4d31afb5bc79993230fc49446918425574db48c01c405e44f365c7559e"
