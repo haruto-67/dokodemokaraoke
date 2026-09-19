@@ -1,5 +1,5 @@
 // renderer <-> main 間の contextBridge API 契約
-import type { AppSettings, ProjectSummary } from './types'
+import type { AnalysisStepProgress, AppSettings, ProjectSummary } from './types'
 
 export const IPC = {
   listProjects: 'project:list',
@@ -26,7 +26,14 @@ export const IPC = {
   onMenuAction: 'app:onMenuAction',
   confirmCloseUnsaved: 'app:confirmCloseUnsaved',
   requestClose: 'app:requestClose',
-  closeConfirmed: 'app:closeConfirmed'
+  closeConfirmed: 'app:closeConfirmed',
+  // Pythonサイドカーでの解析実行(§4.4/§8.2)。1曲5〜10分かかるため、
+  // startは即座にjobIdを返し、進捗/完了/失敗はイベントで別途通知する。
+  startAnalysis: 'analysis:start',
+  cancelAnalysis: 'analysis:cancel',
+  onAnalysisProgress: 'analysis:progress',
+  onAnalysisDone: 'analysis:done',
+  onAnalysisError: 'analysis:error'
 } as const
 
 export interface OpenProjectResult {
@@ -50,6 +57,31 @@ export interface SaveProjectPayload {
     analysis: { sourcePath: string; ext: string } | null
     playback: { sourcePath: string; ext: string } | null
   }
+}
+
+export interface AnalysisStartParams {
+  sourceAudioPath: string
+  lyricsLines: string[]
+  totalDurationSec: number
+}
+
+export interface AnalysisStartResult {
+  jobId: string
+}
+
+export interface AnalysisProgressEvent {
+  jobId: string
+  progress: AnalysisStepProgress
+}
+
+export interface AnalysisDoneEvent {
+  jobId: string
+  result: unknown
+}
+
+export interface AnalysisErrorEvent {
+  jobId: string
+  message: string
 }
 
 export interface DokokaraApi {
@@ -77,4 +109,9 @@ export interface DokokaraApi {
   checkForCrashBackup(): Promise<{ filePath: string; backupPath: string } | null>
   onRequestClose(cb: () => void): () => void
   closeConfirmed(): void
+  startAnalysis(params: AnalysisStartParams): Promise<AnalysisStartResult>
+  cancelAnalysis(jobId: string): Promise<void>
+  onAnalysisProgress(cb: (event: AnalysisProgressEvent) => void): () => void
+  onAnalysisDone(cb: (event: AnalysisDoneEvent) => void): () => void
+  onAnalysisError(cb: (event: AnalysisErrorEvent) => void): () => void
 }

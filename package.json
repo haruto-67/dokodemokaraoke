@@ -11,8 +11,9 @@
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
+    "build:python-runtime": "node scripts/build-python-runtime.mjs",
     "build:unpack": "npm run build && electron-builder --dir",
-    "build:mac": "npm run build && electron-builder --mac --arm64",
+    "build:mac": "npm run build:python-runtime && npm run build && electron-builder --mac --arm64",
     "build:win": "npm run build && electron-builder --win --x64",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",

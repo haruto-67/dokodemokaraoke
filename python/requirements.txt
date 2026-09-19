@@ -1,0 +1,10 @@
+# どこカラv3 Pythonサイドカーの依存関係。
+#
+# torch と torchaudio はメジャー・マイナーを必ず揃えること。torchaudio は
+# 2.11.0 (2026-03-23) を最後にリリースが止まっており、torch はその後も
+# 2.12/2.13/2.14 とリリースが続いている。torch だけ最新に上げると
+# torchaudio.functional.forced_align (§4.4.7 のフォースドアライメントで使用)
+# の互換性が壊れるおそれがあるため、torch 側もこの組に固定する。
+torch==2.11.0
+torchaudio==2.11.0
+transformers==5.17.0

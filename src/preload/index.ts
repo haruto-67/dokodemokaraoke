@@ -1,5 +1,14 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import { IPC, type DokokaraApi, type OpenProjectResult, type SaveProjectPayload } from '@shared/ipc'
+import {
+  IPC,
+  type AnalysisDoneEvent,
+  type AnalysisErrorEvent,
+  type AnalysisProgressEvent,
+  type AnalysisStartParams,
+  type DokokaraApi,
+  type OpenProjectResult,
+  type SaveProjectPayload
+} from '@shared/ipc'
 import type { AppSettings } from '@shared/types'
 
 const api: DokokaraApi = {
@@ -41,7 +50,24 @@ const api: DokokaraApi = {
     ipcRenderer.on(IPC.requestClose, listener)
     return () => ipcRenderer.removeListener(IPC.requestClose, listener)
   },
-  closeConfirmed: () => ipcRenderer.send(IPC.closeConfirmed)
+  closeConfirmed: () => ipcRenderer.send(IPC.closeConfirmed),
+  startAnalysis: (params: AnalysisStartParams) => ipcRenderer.invoke(IPC.startAnalysis, params),
+  cancelAnalysis: (jobId: string) => ipcRenderer.invoke(IPC.cancelAnalysis, jobId),
+  onAnalysisProgress: (cb: (event: AnalysisProgressEvent) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, event: AnalysisProgressEvent): void => cb(event)
+    ipcRenderer.on(IPC.onAnalysisProgress, listener)
+    return () => ipcRenderer.removeListener(IPC.onAnalysisProgress, listener)
+  },
+  onAnalysisDone: (cb: (event: AnalysisDoneEvent) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, event: AnalysisDoneEvent): void => cb(event)
+    ipcRenderer.on(IPC.onAnalysisDone, listener)
+    return () => ipcRenderer.removeListener(IPC.onAnalysisDone, listener)
+  },
+  onAnalysisError: (cb: (event: AnalysisErrorEvent) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, event: AnalysisErrorEvent): void => cb(event)
+    ipcRenderer.on(IPC.onAnalysisError, listener)
+    return () => ipcRenderer.removeListener(IPC.onAnalysisError, listener)
+  }
 }
 
 contextBridge.exposeInMainWorld('dokokara', api)

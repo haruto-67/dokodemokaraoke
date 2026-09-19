@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain } from 'electron'
 import { createMainWindow } from './window'
 import { buildAppMenu } from './menu'
 import { registerIpcHandlers } from './ipcHandlers'
+import { registerAnalysisHandlers } from './analysisManager'
 import { IPC } from '@shared/ipc'
 
 let mainWindow: BrowserWindow | null = null
@@ -27,6 +28,7 @@ app.whenReady().then(() => {
   app.setName('どこでもカラオケセット')
 
   registerIpcHandlers(getWindow)
+  registerAnalysisHandlers(getWindow)
   buildAppMenu(getWindow)
 
   mainWindow = createMainWindow()
