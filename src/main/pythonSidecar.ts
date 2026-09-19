@@ -6,6 +6,12 @@ import type { SidecarMessage, SidecarRequest } from '../shared/pythonSidecarProt
 export interface PythonSidecarOptions {
   /** サイドカーからの進捗通知を受け取るコールバック */
   onProgress?: (id: string, progress: AnalysisStepProgress) => void
+  /**
+   * 子プロセスに追加で渡す環境変数(process.envにマージされる)。
+   * モデル同梱パスの通知(DOKOKARA_MODELS_DIR)やオフライン強制
+   * (HF_HUB_OFFLINE等)に使う。
+   */
+  env?: Record<string, string>
 }
 
 interface PendingRequest {
@@ -26,6 +32,7 @@ export class PythonSidecar {
   private stdoutBuffer = ''
   private readonly pending = new Map<string, PendingRequest>()
   private readonly onProgress?: PythonSidecarOptions['onProgress']
+  private readonly extraEnv: Record<string, string>
 
   constructor(
     private readonly pythonExecutable: string,
@@ -33,11 +40,15 @@ export class PythonSidecar {
     options: PythonSidecarOptions = {}
   ) {
     this.onProgress = options.onProgress
+    this.extraEnv = options.env ?? {}
   }
 
   start(): void {
     if (this.proc) return
-    const proc = spawn(this.pythonExecutable, this.scriptArgs, { stdio: ['pipe', 'pipe', 'pipe'] })
+    const proc = spawn(this.pythonExecutable, this.scriptArgs, {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env, ...this.extraEnv }
+    })
     this.proc = proc
 
     proc.stdout.setEncoding('utf-8')

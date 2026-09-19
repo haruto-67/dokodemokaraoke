@@ -8,3 +8,5 @@ dist/
 coverage/
 resources/python-runtime/
 .python-runtime-tmp/
+resources/models/
+__pycache__/

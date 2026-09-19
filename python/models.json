@@ -1,0 +1,33 @@
+{
+  "release": "https://github.com/haruto-67/dokodemokaraoke/releases/tag/model-weights-v1",
+  "models": [
+    {
+      "filename": "MelBandRoformer.ckpt",
+      "description": "ボーカル分離 (Mel-Band RoFormer, Kimberley Jensen版, MIT)",
+      "url": "https://github.com/haruto-67/dokodemokaraoke/releases/download/model-weights-v1/MelBandRoformer.ckpt",
+      "size": 913106900,
+      "sha256": "87201f4d31afb5bc79993230fc49446918425574db48c01c405e44f365c7559e"
+    },
+    {
+      "filename": "rmvpe.pt",
+      "description": "F0抽出 (RMVPE, MIT)",
+      "url": "https://github.com/haruto-67/dokodemokaraoke/releases/download/model-weights-v1/rmvpe.pt",
+      "size": 181184272,
+      "sha256": "6d62215f4306e3ca278246188607209f09af3dc77ed4232efdd069798c4ec193"
+    },
+    {
+      "filename": "japanese-wav2vec2-base-rs35kh.safetensors",
+      "description": "フォースドアライメント用 日本語wav2vec2 (reazon-research, Apache-2.0)",
+      "url": "https://github.com/haruto-67/dokodemokaraoke/releases/download/model-weights-v1/japanese-wav2vec2-base-rs35kh.safetensors",
+      "size": 386749964,
+      "sha256": "f7e05abd4c9f98e7d311ab0c4904dac8cdde49290f6ac015e96d40e02df0312f"
+    },
+    {
+      "filename": "silero_vad.jit",
+      "description": "フレーズ区間検出 (Silero VAD, MIT)",
+      "url": "https://github.com/haruto-67/dokodemokaraoke/releases/download/model-weights-v1/silero_vad.jit",
+      "size": 2272526,
+      "sha256": "e1122837f4154c511485fe0b9c64455f7b929c96fbb8d79fbdb336383ebd3720"
+    }
+  ]
+}

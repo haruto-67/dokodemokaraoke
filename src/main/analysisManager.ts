@@ -9,7 +9,21 @@ import {
   type AnalysisStartResult
 } from '../shared/ipc'
 import { PythonSidecar } from './pythonSidecar'
-import { getPythonExecutablePath, getPythonSidecarScriptPath } from './pythonRuntime'
+import { getModelsDir, getPythonExecutablePath, getPythonSidecarScriptPath } from './pythonRuntime'
+
+/**
+ * サイドカーに渡す環境変数。ライブラリ既定のキャッシュ(~/.cache/huggingface等)や
+ * Hugging Face Hubへの問い合わせを一切行わせず、同梱パスのみを参照させる
+ * (§5 オフライン動作要件)。
+ */
+function buildSidecarEnv(): Record<string, string> {
+  return {
+    DOKOKARA_MODELS_DIR: getModelsDir(),
+    HF_HUB_OFFLINE: '1',
+    TRANSFORMERS_OFFLINE: '1',
+    HF_HUB_DISABLE_TELEMETRY: '1'
+  }
+}
 
 interface Job {
   sidecar: PythonSidecar
@@ -29,6 +43,7 @@ export function registerAnalysisHandlers(getWindow: () => BrowserWindow | null):
   ipcMain.handle(IPC.startAnalysis, async (_e, params: AnalysisStartParams): Promise<AnalysisStartResult> => {
     const jobId = randomUUID()
     const sidecar = new PythonSidecar(getPythonExecutablePath(), [getPythonSidecarScriptPath()], {
+      env: buildSidecarEnv(),
       onProgress: (_id, progress) => {
         const event: AnalysisProgressEvent = { jobId, progress }
         getWindow()?.webContents.send(IPC.onAnalysisProgress, event)

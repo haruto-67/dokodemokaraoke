@@ -8,3 +8,12 @@
 torch==2.11.0
 torchaudio==2.11.0
 transformers==5.17.0
+
+# ノート化(§4.4.4)。activationはRMVPE由来の出力に差し替えて使う方針のため、
+# basic_pitch自身のTF/ONNX/CoreMLモデルは使わず、note_creation等の後処理
+# ユーティリティだけを使う想定。macOS + Python 3.11では、basic-pitchのPyPI
+# メタデータ上どの条件付き依存(tensorflow-macos等)も適用されず、TF/ONNX
+# バックエンド無しでインストールされる(importはwarningのみで成功する。
+# 実測済み)。バックエンドが必要になった場合は `basic-pitch[onnx]` 等に
+# 差し替えを検討する。
+basic-pitch==0.4.0

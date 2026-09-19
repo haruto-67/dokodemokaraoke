@@ -113,4 +113,23 @@ describe('PythonSidecar', () => {
 
     sidecar.stop()
   })
+
+  it('optionsのenvが子プロセスに渡る(モデル同梱パスの通知に使う)', async () => {
+    const script = writeFakeSidecarScript(`
+      ${readline}
+      function handle(req) {
+        send({ type: 'done', id: req.id, result: { modelsDir: process.env.DOKOKARA_MODELS_DIR ?? null } })
+      }
+    `)
+
+    const sidecar = new PythonSidecar(process.execPath, [script], {
+      env: { DOKOKARA_MODELS_DIR: '/tmp/dokokara-models-test' }
+    })
+    sidecar.start()
+
+    const result = await sidecar.request({ id: 'job-env', method: 'analyze', params: { sourceAudioPath: '', lyricsLines: [], totalDurationSec: 0 } })
+
+    expect(result).toEqual({ modelsDir: '/tmp/dokokara-models-test' })
+    sidecar.stop()
+  })
 })

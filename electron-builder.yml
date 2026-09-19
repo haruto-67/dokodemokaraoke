@@ -26,6 +26,8 @@ mac:
       to: python-runtime
     - from: python/sidecar
       to: python-sidecar
+    - from: resources/models
+      to: models
   identity: null
   hardenedRuntime: false
   gatekeeperAssess: false

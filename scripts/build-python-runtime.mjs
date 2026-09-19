@@ -133,7 +133,8 @@ async function main() {
     console.log('動作確認中...')
     run(pythonBin, [
       '-c',
-      'import torch, torchaudio, transformers; print(f"torch={torch.__version__} torchaudio={torchaudio.__version__} transformers={transformers.__version__}")'
+      'import torch, torchaudio, transformers, basic_pitch; ' +
+        'print(f"torch={torch.__version__} torchaudio={torchaudio.__version__} transformers={transformers.__version__} basic_pitch=OK")'
     ])
 
     writeFileSync(STAMP_FILE, JSON.stringify(currentStamp(), null, 2))
