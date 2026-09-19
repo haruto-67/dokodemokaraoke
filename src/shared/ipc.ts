@@ -1,5 +1,5 @@
 // renderer <-> main 間の contextBridge API 契約
-import type { AnalysisStepProgress, AppSettings, ProjectSummary } from './types'
+import type { AnalysisStepProgress, AppSettings, ProjectSummary, YtDlpUpdateResult } from './types'
 
 export const IPC = {
   listProjects: 'project:list',
@@ -33,7 +33,16 @@ export const IPC = {
   cancelAnalysis: 'analysis:cancel',
   onAnalysisProgress: 'analysis:progress',
   onAnalysisDone: 'analysis:done',
-  onAnalysisError: 'analysis:error'
+  onAnalysisError: 'analysis:error',
+  // YouTube URLからの音源取り込み(§4.3/§4.4.1)。yt-dlpでの取得はネットワーク越しで
+  // 数十秒〜かかるため、startは即座にjobIdを返し、進捗/完了/失敗はイベントで通知する。
+  startSourceIngest: 'sourceIngest:start',
+  cancelSourceIngest: 'sourceIngest:cancel',
+  onSourceIngestProgress: 'sourceIngest:progress',
+  onSourceIngestDone: 'sourceIngest:done',
+  onSourceIngestError: 'sourceIngest:error',
+  // 同梱yt-dlpの自己更新(設定画面から任意実行)。
+  updateYtDlp: 'mediaTools:updateYtDlp'
 } as const
 
 export interface OpenProjectResult {
@@ -84,6 +93,42 @@ export interface AnalysisErrorEvent {
   message: string
 }
 
+export interface SourceIngestStartParams {
+  url: string
+}
+
+export interface SourceIngestStartResult {
+  jobId: string
+}
+
+export type SourceIngestStage = 'downloading' | 'normalizing'
+
+export interface SourceIngestProgressEvent {
+  jobId: string
+  stage: SourceIngestStage
+  progress: number // 0..1。normalizingは所要時間が短いため不定形(0→1)でよい
+  detail?: string
+}
+
+export interface SourceIngestDoneEvent {
+  jobId: string
+  path: string
+  fileName: string
+  ext: string
+}
+
+/**
+ * §4.3: 「動画が非公開・削除済み」「地域制限・年齢制限」「yt-dlpの仕様変更による取得失敗」を
+ * 準備画面上で明示的にハンドリングするための分類。
+ */
+export type SourceIngestErrorKind = 'private_or_deleted' | 'region_or_age_restricted' | 'tool_failure' | 'unknown'
+
+export interface SourceIngestErrorEvent {
+  jobId: string
+  message: string
+  kind: SourceIngestErrorKind
+}
+
 export interface DokokaraApi {
   listProjects(): Promise<ProjectSummary[]>
   openProjectDialog(): Promise<OpenProjectResult | null>
@@ -114,4 +159,10 @@ export interface DokokaraApi {
   onAnalysisProgress(cb: (event: AnalysisProgressEvent) => void): () => void
   onAnalysisDone(cb: (event: AnalysisDoneEvent) => void): () => void
   onAnalysisError(cb: (event: AnalysisErrorEvent) => void): () => void
+  startSourceIngest(params: SourceIngestStartParams): Promise<SourceIngestStartResult>
+  cancelSourceIngest(jobId: string): Promise<void>
+  onSourceIngestProgress(cb: (event: SourceIngestProgressEvent) => void): () => void
+  onSourceIngestDone(cb: (event: SourceIngestDoneEvent) => void): () => void
+  onSourceIngestError(cb: (event: SourceIngestErrorEvent) => void): () => void
+  updateYtDlp(): Promise<YtDlpUpdateResult>
 }

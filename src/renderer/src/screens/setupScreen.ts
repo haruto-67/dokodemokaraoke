@@ -7,8 +7,7 @@ import { parseRubyLine } from '@shared/ruby'
 import { notifyError } from '../lib/projectActions'
 import { parseLyricsLines } from '../lib/lyrics'
 import type { SetupAudioFile } from '../appContext'
-
-const LENGTH_DIFF_WARN_SEC = 3
+import type { SourceIngestDoneEvent, SourceIngestErrorEvent, SourceIngestProgressEvent } from '@shared/ipc'
 
 export function mountSetupScreen(container: HTMLElement, ctx: AppContext): ScreenHandle {
   const root = el('div', { className: 'setup-screen' })
@@ -31,13 +30,111 @@ export function mountSetupScreen(container: HTMLElement, ctx: AppContext): Scree
     })()
   ])
 
-  // --- 音源ドロップゾーン (§4.3) ---
-  const lengthWarning = el('div', { className: 'setup-warning', style: { display: 'none' } as unknown as CSSStyleDeclaration })
+  // --- 音源の取り込み (§4.3: YouTube URL または ローカルファイル1本) ---
+  let ingestJobId: string | null = null
+  let unsubscribeIngest: (() => void) | null = null
+
+  const urlInput = el('input', {
+    type: 'text',
+    placeholder: 'https://www.youtube.com/watch?v=...'
+  }) as HTMLInputElement
+  urlInput.value = ctx.ui.getState().setupDraft.youtubeUrl
+  urlInput.addEventListener('input', () => updateDraft({ youtubeUrl: urlInput.value }))
+
+  const fetchBtn = el('button', { className: 'btn btn-ghost' }, ['取り込む'])
+  const urlRow = el('div', { className: 'setup-source-url' }, [urlInput, fetchBtn])
+
+  const ingestStatus = el('div', { className: 'setup-ingest-status', style: { display: 'none' } as unknown as CSSStyleDeclaration })
+  const ingestLabel = el('span', {}, [''])
+  const ingestBar = el('div', { className: 'setup-ingest-bar' }, [el('div', { className: 'setup-ingest-bar-fill' })])
+  const ingestBarFill = ingestBar.querySelector('.setup-ingest-bar-fill') as HTMLElement
+  const ingestCancelBtn = el('button', { className: 'btn btn-ghost' }, ['キャンセル'])
+  ingestStatus.append(ingestLabel, ingestBar, ingestCancelBtn)
+
+  const divider = el('div', { className: 'setup-source-divider' }, ['または'])
 
   const dropZones = el('div', { className: 'setup-dropzones' })
-  const analysisZone = createDropZone('解析用（オンボーカル・必須）', 'ボーカルを含む通常の音源。ピッチ検出に使用します。', 'analysis')
-  const playbackZone = createDropZone('再生用（オフボーカル・任意）', '伴奏のみの音源。未指定の場合は解析用を再生にも流用します。', 'playback')
-  dropZones.append(analysisZone.el, playbackZone.el)
+  const sourceZone = createDropZone(
+    '原曲音源',
+    '歌の入った音源1本(wav / mp3 / m4a / flac)。伴奏はアプリが自動生成します。',
+    'analysis'
+  )
+  dropZones.append(sourceZone.el)
+
+  const sourceSection = el('div', { className: 'setup-source' }, [urlRow, ingestStatus, divider, dropZones])
+
+  function setIngestUiBusy(busy: boolean): void {
+    urlInput.disabled = busy
+    fetchBtn.disabled = busy
+    fetchBtn.textContent = busy ? '取り込み中…' : '取り込む'
+  }
+
+  function stopIngestListeners(): void {
+    unsubscribeIngest?.()
+    unsubscribeIngest = null
+  }
+
+  function resetIngestUi(): void {
+    ingestJobId = null
+    stopIngestListeners()
+    setIngestUiBusy(false)
+    ingestStatus.style.display = 'none'
+  }
+
+  fetchBtn.addEventListener('click', async () => {
+    const url = urlInput.value.trim()
+    if (!url) {
+      notifyError('YouTubeのURLを入力してください。')
+      return
+    }
+
+    setIngestUiBusy(true)
+    ingestStatus.style.display = 'flex'
+    ingestLabel.textContent = 'ダウンロード中… 0%'
+    ingestBarFill.style.width = '0%'
+
+    const { jobId } = await window.dokokara.startSourceIngest({ url })
+    ingestJobId = jobId
+
+    const offProgress = window.dokokara.onSourceIngestProgress((event: SourceIngestProgressEvent) => {
+      if (event.jobId !== jobId) return
+      if (event.stage === 'downloading') {
+        ingestLabel.textContent = `ダウンロード中… ${Math.round(event.progress * 100)}%`
+      } else {
+        ingestLabel.textContent = '音源を変換中…'
+      }
+      ingestBarFill.style.width = `${Math.round(event.progress * 100)}%`
+    })
+    const offDone = window.dokokara.onSourceIngestDone(async (event: SourceIngestDoneEvent) => {
+      if (event.jobId !== jobId) return
+      try {
+        const data = await window.dokokara.readFileBuffer(event.path)
+        const buffer = await decodeAudio(ctx.playback.audioContext, data)
+        const info: SetupAudioFile = { path: event.path, ext: event.ext, fileName: event.fileName, buffer }
+        updateDraft({ analysisAudio: info })
+        sourceZone.refresh()
+      } catch (e) {
+        notifyError((e as Error).message)
+      } finally {
+        resetIngestUi()
+      }
+    })
+    const offError = window.dokokara.onSourceIngestError((event: SourceIngestErrorEvent) => {
+      if (event.jobId !== jobId) return
+      notifyError(event.message)
+      resetIngestUi()
+    })
+    unsubscribeIngest = () => {
+      offProgress()
+      offDone()
+      offError()
+    }
+  })
+
+  ingestCancelBtn.addEventListener('click', () => {
+    if (ingestJobId) void window.dokokara.cancelSourceIngest(ingestJobId)
+    resetIngestUi()
+  })
 
   // --- 歌詞入力 (§4.5) ---
   const lyricsSection = el('div', { className: 'setup-lyrics' })
@@ -119,7 +216,7 @@ export function mountSetupScreen(container: HTMLElement, ctx: AppContext): Scree
   function createDropZone(
     title: string,
     desc: string,
-    kind: 'analysis' | 'playback'
+    kind: 'analysis'
   ): { el: HTMLElement; refresh: () => void } {
     const zone = el('div', { className: 'dropzone panel-2' })
     const titleEl = el('div', { className: 'dropzone-title' }, [title])
@@ -140,7 +237,6 @@ export function mountSetupScreen(container: HTMLElement, ctx: AppContext): Scree
         infoEl.textContent = ''
         zone.classList.remove('has-file')
       }
-      checkLengthWarning()
     }
 
     async function handleFile(path: string, fileName: string, ext: string, data: ArrayBuffer): Promise<void> {
@@ -148,8 +244,7 @@ export function mountSetupScreen(container: HTMLElement, ctx: AppContext): Scree
       try {
         const buffer = await decodeAudio(ctx.playback.audioContext, data)
         const info: SetupAudioFile = { path, ext, fileName, buffer }
-        if (kind === 'analysis') updateDraft({ analysisAudio: info })
-        else updateDraft({ playbackAudio: info })
+        updateDraft({ analysisAudio: info })
         refresh()
       } catch (e) {
         notifyError((e as Error).message)
@@ -185,25 +280,12 @@ export function mountSetupScreen(container: HTMLElement, ctx: AppContext): Scree
     return { el: zone, refresh }
   }
 
-  function checkLengthWarning(): void {
-    const draft = getDraft()
-    if (draft.analysisAudio && draft.playbackAudio) {
-      const diff = Math.abs(draft.analysisAudio.buffer.duration - draft.playbackAudio.buffer.duration)
-      if (diff >= LENGTH_DIFF_WARN_SEC) {
-        lengthWarning.textContent = `⚠ 解析用と再生用の長さが ${diff.toFixed(1)} 秒異なります。別マスターの可能性があります。`
-        lengthWarning.style.display = 'block'
-        return
-      }
-    }
-    lengthWarning.style.display = 'none'
-  }
-
   const footer = el('div', { className: 'setup-footer' })
   const startBtn = el('button', { className: 'btn btn-primary setup-start-btn' }, ['解析を開始する →'])
   startBtn.addEventListener('click', () => {
     const draft = getDraft()
     if (!draft.analysisAudio) {
-      notifyError('解析用（オンボーカル）の音源を指定してください。')
+      notifyError('YouTube URLまたはローカルファイルで音源を指定してください。')
       return
     }
     const lines = parseLyricsLines(draft.lyricsText, draft.removeSpaces)
@@ -218,11 +300,13 @@ export function mountSetupScreen(container: HTMLElement, ctx: AppContext): Scree
   })
   footer.appendChild(startBtn)
 
-  root.append(header, nameRow, dropZones, lengthWarning, lyricsSection, footer)
+  root.append(header, nameRow, sourceSection, lyricsSection, footer)
   renderPreview()
 
   return {
     unmount() {
+      if (ingestJobId) void window.dokokara.cancelSourceIngest(ingestJobId)
+      stopIngestListeners()
       container.removeChild(root)
     }
   }

@@ -82,6 +82,25 @@ export function mountSettingsModal(root: HTMLElement, ctx: AppContext): void {
   countInInput.addEventListener('change', () => void patchSettings({ countInEnabled: countInInput.checked }))
   countInRow.control.appendChild(countInInput)
 
+  // --- yt-dlpの更新(§4.3実装メモ: 同梱版＋任意更新。YouTube側の仕様変更で壊れやすいため) ---
+  const ytDlpRow = settingsRow('yt-dlp(YouTube取り込み)')
+  const ytDlpStatus = el('span', { className: 'mono settings-path' }, [''])
+  const ytDlpUpdateBtn = el('button', { className: 'btn btn-ghost' }, ['更新を確認'])
+  ytDlpUpdateBtn.addEventListener('click', async () => {
+    ytDlpUpdateBtn.disabled = true
+    ytDlpStatus.textContent = '確認中…'
+    try {
+      const result = await window.dokokara.updateYtDlp()
+      ytDlpStatus.textContent = result.message
+    } catch (e) {
+      ytDlpStatus.textContent = ''
+      notifyError(`yt-dlpの更新に失敗しました: ${(e as Error).message}`)
+    } finally {
+      ytDlpUpdateBtn.disabled = false
+    }
+  })
+  ytDlpRow.control.append(ytDlpStatus, ytDlpUpdateBtn)
+
   body.append(
     dirRow.row,
     backupRow.row,
@@ -90,7 +109,8 @@ export function mountSettingsModal(root: HTMLElement, ctx: AppContext): void {
     seekRow.row,
     bigSeekRow.row,
     sourceRow.row,
-    countInRow.row
+    countInRow.row,
+    ytDlpRow.row
   )
 
   async function patchSettings(partial: Partial<ReturnType<typeof ctx.settings.getState>>): Promise<void> {

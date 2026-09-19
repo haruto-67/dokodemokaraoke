@@ -171,3 +171,15 @@ export interface PipelineLogEntry {
   durationMs: number
   result: string
 }
+
+/**
+ * 同梱yt-dlpの自己更新(§4.3の実装メモ「同梱版＋任意更新」)。
+ * yt-dlpは配信元(YouTube)の仕様変更で壊れやすいため、アプリ内から
+ * 同梱バイナリを最新版に更新できる導線を設定画面に用意する。
+ */
+export type YtDlpUpdateOutcome = 'updated' | 'already_latest' | 'failed'
+
+export interface YtDlpUpdateResult {
+  outcome: YtDlpUpdateOutcome
+  message: string
+}

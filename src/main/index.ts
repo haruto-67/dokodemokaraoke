@@ -3,6 +3,7 @@ import { createMainWindow } from './window'
 import { buildAppMenu } from './menu'
 import { registerIpcHandlers } from './ipcHandlers'
 import { registerAnalysisHandlers } from './analysisManager'
+import { registerSourceIngestHandlers } from './sourceIngest'
 import { IPC } from '@shared/ipc'
 
 let mainWindow: BrowserWindow | null = null
@@ -29,6 +30,7 @@ app.whenReady().then(() => {
 
   registerIpcHandlers(getWindow)
   registerAnalysisHandlers(getWindow)
+  registerSourceIngestHandlers(getWindow)
   buildAppMenu(getWindow)
 
   mainWindow = createMainWindow()

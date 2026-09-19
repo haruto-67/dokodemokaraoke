@@ -21,6 +21,9 @@ export interface SetupDraft {
   projectName: string
   analysisAudio: SetupAudioFile | null
   playbackAudio: SetupAudioFile | null
+  // YouTube URL入力欄のドラフト値(§4.3)。取り込み失敗で準備画面に戻った際も
+  // 入力し直さずに済むよう、他のドラフト項目と同様にここへ保持する。
+  youtubeUrl: string
   lyricsText: string
   removeSpaces: boolean
 }
@@ -30,6 +33,7 @@ export function emptySetupDraft(): SetupDraft {
     projectName: '',
     analysisAudio: null,
     playbackAudio: null,
+    youtubeUrl: '',
     lyricsText: '',
     removeSpaces: false
   }

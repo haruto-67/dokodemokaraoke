@@ -28,6 +28,8 @@ mac:
       to: python-sidecar
     - from: resources/models
       to: models
+    - from: resources/media-tools
+      to: media-tools
   identity: null
   hardenedRuntime: false
   gatekeeperAssess: false

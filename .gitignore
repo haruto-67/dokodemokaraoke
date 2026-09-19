@@ -9,4 +9,5 @@ coverage/
 resources/python-runtime/
 .python-runtime-tmp/
 resources/models/
+resources/media-tools/
 __pycache__/

@@ -7,7 +7,11 @@ import {
   type AnalysisStartParams,
   type DokokaraApi,
   type OpenProjectResult,
-  type SaveProjectPayload
+  type SaveProjectPayload,
+  type SourceIngestDoneEvent,
+  type SourceIngestErrorEvent,
+  type SourceIngestProgressEvent,
+  type SourceIngestStartParams
 } from '@shared/ipc'
 import type { AppSettings } from '@shared/types'
 
@@ -67,7 +71,25 @@ const api: DokokaraApi = {
     const listener = (_e: Electron.IpcRendererEvent, event: AnalysisErrorEvent): void => cb(event)
     ipcRenderer.on(IPC.onAnalysisError, listener)
     return () => ipcRenderer.removeListener(IPC.onAnalysisError, listener)
-  }
+  },
+  startSourceIngest: (params: SourceIngestStartParams) => ipcRenderer.invoke(IPC.startSourceIngest, params),
+  cancelSourceIngest: (jobId: string) => ipcRenderer.invoke(IPC.cancelSourceIngest, jobId),
+  onSourceIngestProgress: (cb: (event: SourceIngestProgressEvent) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, event: SourceIngestProgressEvent): void => cb(event)
+    ipcRenderer.on(IPC.onSourceIngestProgress, listener)
+    return () => ipcRenderer.removeListener(IPC.onSourceIngestProgress, listener)
+  },
+  onSourceIngestDone: (cb: (event: SourceIngestDoneEvent) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, event: SourceIngestDoneEvent): void => cb(event)
+    ipcRenderer.on(IPC.onSourceIngestDone, listener)
+    return () => ipcRenderer.removeListener(IPC.onSourceIngestDone, listener)
+  },
+  onSourceIngestError: (cb: (event: SourceIngestErrorEvent) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, event: SourceIngestErrorEvent): void => cb(event)
+    ipcRenderer.on(IPC.onSourceIngestError, listener)
+    return () => ipcRenderer.removeListener(IPC.onSourceIngestError, listener)
+  },
+  updateYtDlp: () => ipcRenderer.invoke(IPC.updateYtDlp)
 }
 
 contextBridge.exposeInMainWorld('dokokara', api)
