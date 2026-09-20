@@ -7,6 +7,7 @@ export interface LoadedProjectFile {
   json: DokokaraProject
   analysisAudio: { path: string; data: Buffer } | null
   playbackAudio: { path: string; data: Buffer } | null
+  originalAudio: { path: string; data: Buffer } | null
   f0Bin: Buffer | null
   brokenParts: string[]
 }
@@ -62,7 +63,20 @@ export async function loadDokokaraFile(filePath: string): Promise<LoadedProjectF
     }
   }
 
-  return { json, analysisAudio, playbackAudio, f0Bin, brokenParts }
+  // audio.original(分離前の元音源)はv3.1で新設したフィールドのため、それより前に
+  // 作成されたプロジェクトには存在しない。無くてもbrokenParts扱いにはしない。
+  let originalAudio: { path: string; data: Buffer } | null = null
+  if (json.audio?.original?.path) {
+    try {
+      const f = zip.file(json.audio.original.path)
+      if (f) originalAudio = { path: json.audio.original.path, data: await f.async('nodebuffer') }
+      else brokenParts.push(json.audio.original.path)
+    } catch {
+      brokenParts.push(json.audio.original.path)
+    }
+  }
+
+  return { json, analysisAudio, playbackAudio, originalAudio, f0Bin, brokenParts }
 }
 
 export interface SaveDokokaraInput {
@@ -70,6 +84,7 @@ export interface SaveDokokaraInput {
   f0Bin: Buffer | null
   analysisAudio: { path: string; data: Buffer } | null
   playbackAudio: { path: string; data: Buffer } | null
+  originalAudio: { path: string; data: Buffer } | null
 }
 
 /**
@@ -85,6 +100,9 @@ export async function saveDokokaraFile(filePath: string, input: SaveDokokaraInpu
   }
   if (input.playbackAudio) {
     zip.file(input.playbackAudio.path, input.playbackAudio.data, { compression: 'STORE' })
+  }
+  if (input.originalAudio) {
+    zip.file(input.originalAudio.path, input.originalAudio.data, { compression: 'STORE' })
   }
 
   await mkdir(dirname(filePath), { recursive: true })

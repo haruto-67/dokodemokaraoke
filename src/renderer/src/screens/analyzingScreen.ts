@@ -3,7 +3,7 @@ import type { ScreenHandle } from '../lib/screen'
 import { el, clear } from '../lib/dom'
 import { decodeAudio } from '../lib/audio'
 import { parseLyricsLines } from '../lib/lyrics'
-import { notifyError } from '../lib/projectActions'
+import { notifyError, bufferForSource } from '../lib/projectActions'
 import { tokenizeLine } from '@shared/tokenize'
 import { allocateTokenTimings, findPitchChangePoints } from '@shared/analysis/allocate'
 import {
@@ -271,6 +271,14 @@ export function mountAnalyzingScreen(container: HTMLElement, ctx: AppContext): S
       duration: instrumentalBuffer.duration,
       sampleRate: instrumentalBuffer.sampleRate
     }
+    // 分離前の元音源(本家ミックス、§4.10「音声パターン」)。解析前に準備画面で読み込んだ
+    // バッファ・ファイルをそのまま使う(Pythonサイドカーへの再問い合わせは不要)。
+    project.audio.original = {
+      originalFileName: analysisAudio.fileName,
+      path: `audio/original${analysisAudio.ext}`,
+      duration: analysisAudio.buffer.duration,
+      sampleRate: analysisAudio.buffer.sampleRate
+    }
     project.analysis.notes = result.notes
     project.analysis.phrases = result.phraseSegments
     project.analysis.frameCount = f0Hz.length
@@ -279,16 +287,17 @@ export function mountAnalyzingScreen(container: HTMLElement, ctx: AppContext): S
     const audioState: EditorAudioState = {
       analysisBuffer: vocalsBuffer,
       playbackBuffer: instrumentalBuffer,
+      originalBuffer: analysisAudio.buffer,
       analysisSourcePath: result.vocalsPath,
       playbackSourcePath: result.instrumentalPath,
+      originalSourcePath: analysisAudio.path,
       analysisExt: '.wav',
-      playbackExt: '.wav'
+      playbackExt: '.wav',
+      originalExt: analysisAudio.ext
     }
 
     ctx.editor.loadProject(null, project, f0Hz, audioState)
-    ctx.playback.setBuffer(
-      project.playback.defaultSource === 'analysis' ? audioState.analysisBuffer : audioState.playbackBuffer ?? audioState.analysisBuffer
-    )
+    ctx.playback.setBuffer(bufferForSource(audioState, project.playback.defaultSource))
     ctx.navigate('editor')
   }
 

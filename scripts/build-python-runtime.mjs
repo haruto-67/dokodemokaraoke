@@ -133,8 +133,9 @@ async function main() {
     console.log('動作確認中...')
     run(pythonBin, [
       '-c',
-      'import torch, torchaudio, transformers, basic_pitch, mel_band_roformer; ' +
-        'print(f"torch={torch.__version__} torchaudio={torchaudio.__version__} transformers={transformers.__version__} basic_pitch=OK mel_band_roformer={mel_band_roformer.__version__}")'
+      'import torch, torchaudio, transformers, basic_pitch, mel_band_roformer, ctc_segmentation, numpy; ' +
+        'print(f"torch={torch.__version__} torchaudio={torchaudio.__version__} transformers={transformers.__version__} ' +
+        'basic_pitch=OK mel_band_roformer={mel_band_roformer.__version__} ctc_segmentation=OK numpy={numpy.__version__}")'
     ])
 
     console.log('pyopenjtalkの辞書を取得中(初回importの副作用。以降はsite-packages内に永続化される)...')

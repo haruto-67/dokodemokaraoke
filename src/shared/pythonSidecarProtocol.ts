@@ -26,7 +26,7 @@ export interface AnalyzeSidecarLine {
   text: string
   start: number
   end: number
-  /** forced alignの平均対数尤度スコア。フレーズ区間数不足で対応するVAD区間が無かった行は含まれない */
+  /** ctc-segmentationの平均対数尤度をexpで0..1へ変換した値 */
   confidence: number
 }
 
@@ -35,9 +35,14 @@ export interface AnalyzeSidecarResult {
   instrumentalPath: string
   f0Path: string
   notes: DokokaraNote[]
+  /** Silero VADで検出したフレーズ区間。歌詞タイミング付け自体には使わず、
+   *  編集画面のガイド線・スナップ対象としてのみ使う(§4.4.5)。 */
   phraseSegments: DokokaraPhrase[]
-  /** 歌詞行の出現順に、対応するVAD区間があった行だけを含む(要件定義書v3 §4.4.7の単純化方針)。
-   *  歌詞行数がVAD区間数より多い場合、末尾の行はここに含まれない(呼び出し側でフォールバック処理する)。 */
+  /**
+   * 歌詞行リスト全体を曲全体のvocals音声に一括アライメントした結果(ctc-segmentation、
+   * 要件定義書v3 §4.4.7)。lyricsLinesと同じ長さ・同じ順序で1行1エントリ、欠落は起きない
+   * (VAD区間数とのミスマッチで行がズレていた旧方式の問題を解消)。
+   */
   lyrics: AnalyzeSidecarLine[]
 }
 

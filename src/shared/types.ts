@@ -43,6 +43,14 @@ export type PitchMethod = 'rmvpe'
 export type AlignMethod = 'wav2vec2-ctc'
 
 /**
+ * 本番/編集画面で再生する音源の種類(§4.10「音声パターン」)。
+ * - playback: 分離済み伴奏(オフボーカル、従来通り)
+ * - analysis: 分離済みボーカルのみ(旧「オンボーカル」表記から「ボーカルのみ」に改称。中身は同じ)
+ * - original: 分離前の元音源(本家ミックス、新設)。旧バージョンのプロジェクトには無いことがある
+ */
+export type PlaySource = 'playback' | 'analysis' | 'original'
+
+/**
  * F0(基本周波数)曲線1フレームあたりの秒数。Basic Pitchのpost-processing座標系
  * (ANNOTATIONS_FPS=86、python/sidecar/f0_notes.py参照)に合わせて固定。
  */
@@ -61,11 +69,14 @@ export interface DokokaraProject {
     // alignmentOffsetSamples(独立収録した2トラックの時間合わせ)は不要。
     analysis: DokokaraAudioTrack | null
     playback: DokokaraAudioTrack | null
+    /** 分離前の元音源(本家ミックス)。「音声パターン」に3つ目の選択肢を追加するために新設。
+     *  この項目が無いバージョンで作成された既存プロジェクトではnullになる。 */
+    original: DokokaraAudioTrack | null
   }
 
   playback: {
     offsetMs: number
-    defaultSource: 'playback' | 'analysis'
+    defaultSource: PlaySource
   }
 
   analysis: {
@@ -95,7 +106,8 @@ export function createEmptyProject(name: string): DokokaraProject {
     updatedAt: now,
     audio: {
       analysis: null,
-      playback: null
+      playback: null,
+      original: null
     },
     playback: {
       offsetMs: 0,
@@ -123,7 +135,7 @@ export interface AppSettings {
   snapDistancePx: number
   seekStepSec: number
   bigSeekStepSec: number
-  defaultPerformSource: 'playback' | 'analysis'
+  defaultPerformSource: PlaySource
   countInEnabled: boolean
   /** 採点用マイク入力デバイス(§4.12.1)。nullはブラウザ既定デバイスを使う */
   micDeviceId: string | null

@@ -1,14 +1,18 @@
-import type { DokokaraLine, DokokaraProject } from '@shared/types'
+import type { DokokaraLine, DokokaraProject, PlaySource } from '@shared/types'
 import { Store } from './store'
 import { HistoryManager } from './history'
 
 export interface EditorAudioState {
   analysisBuffer: AudioBuffer | null
   playbackBuffer: AudioBuffer | null
+  /** 分離前の元音源(本家ミックス)。無いプロジェクトではnull */
+  originalBuffer: AudioBuffer | null
   analysisSourcePath: string | null // ファイルシステム上の一時/元パス（保存時に読み直す）
   playbackSourcePath: string | null
+  originalSourcePath: string | null
   analysisExt: string | null
   playbackExt: string | null
+  originalExt: string | null
 }
 
 export interface EditorState {
@@ -24,7 +28,7 @@ export interface EditorState {
   scrollSec: number
   playheadSec: number
   isPlaying: boolean
-  playSource: 'playback' | 'analysis'
+  playSource: PlaySource
   showGuides: boolean
   snapEnabled: boolean
   tapMode: boolean
@@ -34,10 +38,13 @@ function emptyAudioState(): EditorAudioState {
   return {
     analysisBuffer: null,
     playbackBuffer: null,
+    originalBuffer: null,
     analysisSourcePath: null,
     playbackSourcePath: null,
+    originalSourcePath: null,
     analysisExt: null,
-    playbackExt: null
+    playbackExt: null,
+    originalExt: null
   }
 }
 

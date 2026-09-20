@@ -36,6 +36,13 @@ async function toOpenResult(filePath: string): Promise<OpenProjectResult> {
             data: bufferToArrayBuffer(loaded.playbackAudio.data),
             mime: mimeForExt(extname(loaded.playbackAudio.path))
           }
+        : null,
+      original: loaded.originalAudio
+        ? {
+            path: loaded.originalAudio.path,
+            data: bufferToArrayBuffer(loaded.originalAudio.data),
+            mime: mimeForExt(extname(loaded.originalAudio.path))
+          }
         : null
     },
     f0Bin: loaded.f0Bin ? bufferToArrayBuffer(loaded.f0Bin) : null,
@@ -55,12 +62,16 @@ async function persist(payload: SaveProjectPayload, filePath: string): Promise<v
   const playbackAudio = payload.audio.playback
     ? { path: `audio/off${payload.audio.playback.ext}`, data: await readFile(payload.audio.playback.sourcePath) }
     : null
+  const originalAudio = payload.audio.original
+    ? { path: `audio/original${payload.audio.original.ext}`, data: await readFile(payload.audio.original.sourcePath) }
+    : null
 
   await saveDokokaraFile(filePath, {
     json,
     f0Bin: payload.f0Bin ? Buffer.from(payload.f0Bin) : null,
     analysisAudio,
-    playbackAudio
+    playbackAudio,
+    originalAudio
   })
 }
 

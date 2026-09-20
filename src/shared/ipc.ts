@@ -52,6 +52,7 @@ export interface OpenProjectResult {
   audio: {
     analysis: { path: string; data: ArrayBuffer; mime: string } | null
     playback: { path: string; data: ArrayBuffer; mime: string } | null
+    original: { path: string; data: ArrayBuffer; mime: string } | null
   }
   f0Bin: ArrayBuffer | null
   brokenParts: string[]
@@ -64,6 +65,7 @@ export interface SaveProjectPayload {
   audio: {
     analysis: { sourcePath: string; ext: string } | null
     playback: { sourcePath: string; ext: string } | null
+    original: { sourcePath: string; ext: string } | null
   }
 }
 

@@ -1,6 +1,6 @@
 import type { AppContext } from '../appContext'
 import { emptySetupDraft } from '../appContext'
-import type { DokokaraProject } from '@shared/types'
+import type { DokokaraProject, PlaySource } from '@shared/types'
 import type { OpenProjectResult } from '@shared/ipc'
 import { decodeAudio } from './audio'
 import type { EditorAudioState } from '../state/editorStore'
@@ -28,7 +28,8 @@ export function notifyError(message: string): void {
 async function applyOpenResult(
   ctx: AppContext,
   result: OpenProjectResult,
-  editorFilePath: string = result.filePath
+  editorFilePath: string = result.filePath,
+  destinationScreen: 'editor' | 'perform' = 'editor'
 ): Promise<void> {
   if (result.brokenParts.length > 0) {
     notifyError(
@@ -40,10 +41,13 @@ async function applyOpenResult(
   const audioState: EditorAudioState = {
     analysisBuffer: null,
     playbackBuffer: null,
+    originalBuffer: null,
     analysisSourcePath: null,
     playbackSourcePath: null,
+    originalSourcePath: null,
     analysisExt: null,
-    playbackExt: null
+    playbackExt: null,
+    originalExt: null
   }
 
   const audioCtx = ctx.playback.audioContext
@@ -61,15 +65,27 @@ async function applyOpenResult(
       notifyError((e as Error).message)
     }
   }
+  if (result.audio.original) {
+    try {
+      audioState.originalBuffer = await decodeAudio(audioCtx, result.audio.original.data)
+    } catch (e) {
+      notifyError((e as Error).message)
+    }
+  }
 
   const pitchHz = result.f0Bin ? new Float32Array(result.f0Bin) : null
 
   ctx.editor.loadProject(editorFilePath, json, pitchHz, audioState)
-  ctx.playback.setBuffer(
-    json.playback.defaultSource === 'analysis' ? audioState.analysisBuffer : audioState.playbackBuffer ?? audioState.analysisBuffer
-  )
+  ctx.playback.setBuffer(bufferForSource(audioState, json.playback.defaultSource))
   rememberRecent(editorFilePath)
-  ctx.navigate('editor')
+  ctx.navigate(destinationScreen)
+}
+
+/** playSource(音声パターン、§4.10)に対応する再生用バッファを選ぶ。無い場合はオフボーカル→オンボーカルの順にフォールバックする。 */
+export function bufferForSource(audio: EditorAudioState, source: PlaySource): AudioBuffer | null {
+  if (source === 'original' && audio.originalBuffer) return audio.originalBuffer
+  if (source === 'analysis' && audio.analysisBuffer) return audio.analysisBuffer
+  return audio.playbackBuffer ?? audio.analysisBuffer ?? audio.originalBuffer
 }
 
 export async function openProjectByPath(ctx: AppContext, filePath: string): Promise<void> {
@@ -82,6 +98,19 @@ export async function openProjectByPath(ctx: AppContext, filePath: string): Prom
   }
   if (!result) return
   await applyOpenResult(ctx, result)
+}
+
+/** ホーム画面から、編集画面を経由せず直接本番画面でプロジェクトを開く(§3画面遷移)。 */
+export async function openProjectByPathForPerform(ctx: AppContext, filePath: string): Promise<void> {
+  let result
+  try {
+    result = await window.dokokara.openProjectPath(filePath)
+  } catch (e) {
+    notifyError(`プロジェクトを開けませんでした: ${(e as Error).message}`)
+    return
+  }
+  if (!result) return
+  await applyOpenResult(ctx, result, result.filePath, 'perform')
 }
 
 /** ⌘O: ダイアログでプロジェクトファイルを選んで開く */
@@ -140,6 +169,10 @@ export async function saveProject(ctx: AppContext, saveAs: boolean): Promise<boo
       playback:
         state.audio.playbackSourcePath && state.audio.playbackExt
           ? { sourcePath: state.audio.playbackSourcePath, ext: state.audio.playbackExt }
+          : null,
+      original:
+        state.audio.originalSourcePath && state.audio.originalExt
+          ? { sourcePath: state.audio.originalSourcePath, ext: state.audio.originalExt }
           : null
     }
   }
@@ -178,6 +211,10 @@ export async function backupProject(ctx: AppContext): Promise<void> {
       playback:
         state.audio.playbackSourcePath && state.audio.playbackExt
           ? { sourcePath: state.audio.playbackSourcePath, ext: state.audio.playbackExt }
+          : null,
+      original:
+        state.audio.originalSourcePath && state.audio.originalExt
+          ? { sourcePath: state.audio.originalSourcePath, ext: state.audio.originalExt }
           : null
     }
   }

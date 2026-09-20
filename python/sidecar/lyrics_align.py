@@ -1,4 +1,4 @@
-"""歌詞のモーラ読み変換とwav2vec2 CTC forced align(要件定義書v3 §4.4.6/§4.4.7 STEP6/STEP7)。
+"""歌詞のモーラ読み変換とwav2vec2 CTCベースのタイミング付け(要件定義書v3 §4.4.6/§4.4.7)。
 
 同梱チェックポイント(japanese-wav2vec2-base-rs35kh.safetensors, Apache-2.0,
 reazon-research)は標準のHuggingFace `Wav2Vec2ForCTC`アーキテクチャ(config
@@ -11,6 +11,12 @@ vocab_size=3003)とstate_dictキーが完全一致することを確認済み。
 カタカナ→ひらがな変換をしてから、この語彙に対する自前の貪欲最長一致
 トークナイザーでID列化する(transformersの`Wav2Vec2CTCTokenizer`を使わず
 vocab.jsonだけを持つのは、依存を増やさず動作をこちらで完全に把握するため)。
+
+メインの歌詞タイミング付けは`align_lyrics_lines_to_song`(ctc-segmentation使用、
+歌詞行リスト全体を曲全体に一括アライメントする方式)。`align_tokens_to_audio`
+(forced_align、1区間ずつの旧方式)は現在main.pyからは呼ばれていないが、
+wav2vec2モデルの読み込み・blank ID・CTC長さ制約まわりの回帰テストとして
+引き続き価値があるため残している。
 """
 
 from __future__ import annotations
@@ -290,3 +296,91 @@ def align_tokens_to_audio(
     # 出しても直感的でないため、平均対数尤度をexpで0..1の値(幾何平均的な確率)へ戻す。
     avg_confidence = float(np.exp(np.mean(frame_scores))) if frame_scores else 0.0
     return tokens, avg_confidence
+
+
+class AlignedLine(TypedDict):
+    text: str
+    start: float
+    end: float
+    confidence: float
+
+
+def _compute_full_log_probs(model, audio_16k_mono: np.ndarray, chunk_duration_sec: float = 20.0) -> np.ndarray:
+    """曲全体のvocals音声をwav2vec2に通し、時間方向に連結したlog_probs行列(フレーム数, vocab_size)を返す。
+
+    wav2vec2の自己注意は計算量がフレーム数の2乗に比例するため、数分の曲全体を一度に
+    通すとCPUでは非現実的な時間・メモリを要する。そのため一定長のチャンクに区切って
+    個別に推論し、結果を時間方向に単純連結する(重ね合わせやクロスフェードはしない)。
+    チャンク境界をまたぐ文字の認識精度がわずかに落ちうるが、歌詞タイミング付けは
+    完全自動を目標とせず手修正前提(要件定義書v3 §4.4.7)のため許容する。
+    """
+    chunk_samples = int(chunk_duration_sec * WAV2VEC2_SAMPLE_RATE)
+    chunks_log_probs = []
+    with torch.no_grad():
+        for start in range(0, len(audio_16k_mono), chunk_samples):
+            chunk = audio_16k_mono[start : start + chunk_samples]
+            if len(chunk) == 0:
+                continue
+            normalized = _normalize_audio(chunk)
+            logits = model(torch.from_numpy(normalized).unsqueeze(0)).logits
+            chunks_log_probs.append(torch.log_softmax(logits, dim=-1)[0])
+    if not chunks_log_probs:
+        return np.zeros((0, model.config.vocab_size), dtype=np.float32)
+    return torch.cat(chunks_log_probs, dim=0).numpy()
+
+
+def align_lyrics_lines_to_song(
+    lyrics_lines: List[str],
+    vocals_audio_16k_mono: np.ndarray,
+    model_path: Path,
+    vocab: "Wav2Vec2Vocab | None" = None,
+) -> List[AlignedLine]:
+    """歌詞行のリスト全体を、曲全体のvocals音声に一括でアライメントする(要件定義書v3 §4.4.7)。
+
+    VAD区間ごとにmin(歌詞行数, 検出区間数)で対応付けていた旧方式は、VADが想定と違う
+    個数にフレーズを区切ると、そこから後ろの行が全部ズレるという問題があった(実機で
+    「音程は正しいのに歌詞が付いていない箇所がある」という形で発現)。ctc-segmentation
+    (ESPnetチーム実装、Apache-2.0)を使い、歌詞行を時系列順の1本の系列として曲全体に
+    対して一括アライメントする方式に置き換える。歌詞行は曲中で必ず時系列順に出現する
+    という前提のみに依存し、行の個数の対応付けミスが起きようがない。間奏・アドリブ等の
+    「歌詞に無い区間」も、blankへの遷移コストが低いためDPが自然に読み飛ばす。
+
+    戻り値は`lyrics_lines`と同じ長さ・同じ順序(1行1エントリ、対応付けの欠落は起きない)。
+    空文字列の行(空行区切り)はaudioとの対応が無いため、前後の行の境界に押し付けられた
+    ゼロ幅に近い区間になる(ctc_segmentationの空utteranceに対する自然な挙動、特別扱い不要)。
+    """
+    import ctc_segmentation as ctc_seg
+
+    if vocab is None:
+        vocab = Wav2Vec2Vocab()
+    if not lyrics_lines:
+        return []
+
+    model = _load_wav2vec2_model(model_path)
+    blank_id = model.config.vocab_size - 1  # align_tokens_to_audioと同じ根拠(コメント参照)
+
+    lpz = _compute_full_log_probs(model, vocals_audio_16k_mono)
+
+    readings = [text_to_hiragana_reading(line) for line in lyrics_lines]
+    token_lists = [np.array(vocab.encode(reading), dtype=np.int64) for reading in readings]
+
+    config = ctc_seg.CtcSegmentationParameters()
+    config.index_duration = WAV2VEC2_STRIDE_SAMPLES / WAV2VEC2_SAMPLE_RATE
+    config.blank = blank_id
+    # char_listはデバッグ用状態表示にのみ使われアライメント計算自体には影響しない
+    # (ctc_segmentation.ctc_segmentation実装で確認済み)。vocab.json未収録の特殊トークン
+    # id(vocab_size-1のblankを含む)にはWav2Vec2Vocab.decode_singleが"<unk>"を返す。
+    config.char_list = [vocab.decode_single(i) for i in range(model.config.vocab_size)]
+
+    ground_truth_mat, utt_begin_indices = ctc_seg.prepare_token_list(config, token_lists)
+    timings, char_probs, _state_list = ctc_seg.ctc_segmentation(config, lpz, ground_truth_mat)
+    segments = ctc_seg.determine_utterance_segments(config, utt_begin_indices, char_probs, timings, lyrics_lines)
+
+    result: List[AlignedLine] = []
+    for line_text, (start, end, avg_log_prob) in zip(lyrics_lines, segments):
+        # avg_log_probはdetermine_utterance_segments内部でmin_prob=-1e10を「区間なし」の
+        # 番兵値として使うため、その場合はexpせず信頼度0にする(exp(-1e10)は数学的には0だが
+        # 意図を明示するため分岐する)。
+        confidence = float(np.exp(avg_log_prob)) if avg_log_prob > -1e9 else 0.0
+        result.append({"text": line_text, "start": float(start), "end": float(end), "confidence": confidence})
+    return result

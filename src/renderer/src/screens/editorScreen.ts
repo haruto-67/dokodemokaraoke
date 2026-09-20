@@ -1,15 +1,17 @@
 import type { AppContext } from '../appContext'
 import type { ScreenHandle } from '../lib/screen'
 import { el, clear, formatTime } from '../lib/dom'
-import { saveProject, confirmDiscardIfDirty } from '../lib/projectActions'
+import { saveProject, confirmDiscardIfDirty, bufferForSource } from '../lib/projectActions'
 import { snapTime, nearestGridTime, SNAP_PRIORITY, type SnapTarget } from '../lib/snap'
 import { rescaleTokensExcludingLocked, reallocateRespectingLocks } from '../lib/retiming'
 import { buildWaveformPeaks } from '../lib/waveform'
 import { tokenizeLine } from '@shared/tokenize'
 import { allocateTokenTimings, findPitchChangePoints } from '@shared/analysis/allocate'
-import { DEFAULT_HOP_SEC, type DokokaraLine, type DokokaraToken } from '@shared/types'
+import { DEFAULT_HOP_SEC, type DokokaraLine, type DokokaraToken, type PlaySource } from '@shared/types'
 
 const BASE_PPS = 80 // 1倍ズームでの1秒あたりピクセル数
+// タイムラインの末尾より先(再生バーが存在しない範囲)へも手動スクロールできるようにする余白(px)
+const SCROLL_END_PADDING_PX = 400
 const MIN_ZOOM = 0.25
 const MAX_ZOOM = 8
 const RIBBON_HEIGHT = 110
@@ -49,7 +51,11 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
   const playBtn = el('button', { className: 'btn btn-ghost' }, ['▶'])
   const timeLabel = el('span', { className: 'mono editor-time' }, ['0:00.00'])
   const sourceSelect = el('select', { className: 'editor-select' }) as HTMLSelectElement
-  sourceSelect.append(el('option', { value: 'playback' }, ['オフボーカル']), el('option', { value: 'analysis' }, ['オンボーカル']))
+  sourceSelect.append(
+    el('option', { value: 'playback' }, ['オフボーカル']),
+    el('option', { value: 'original' }, ['オンボーカル']),
+    el('option', { value: 'analysis' }, ['ボーカルのみ'])
+  )
   const guidesBtn = el('button', { className: 'btn btn-ghost' }, ['ガイド'])
   const snapBtn = el('button', { className: 'btn btn-ghost' }, ['スナップ'])
   const zoomOutBtn = el('button', { className: 'btn btn-ghost' }, ['−'])
@@ -86,6 +92,13 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
   const playhead = el('div', { className: 'editor-playhead' })
   track.append(ribbonSvgWrap, blocksLayer, boundaryLayer, playhead)
   scrollArea.appendChild(track)
+  // 手動スクロールで再生バーが画面外に出た時の方向インジケーター(§スクロール)。
+  // scrollAreaの外(editor-main直下)に置き、スクロールに追従せずビューポート基準で固定表示する。
+  const playheadIndicator = el('button', { className: 'editor-playhead-indicator' })
+  playheadIndicator.addEventListener('click', () => {
+    const x = xForTime(playheadDisplaySec())
+    scrollArea.scrollLeft = Math.max(0, x - scrollArea.clientWidth / 2)
+  })
 
   // ---------- サイドパネル(選択行のテキスト編集) ----------
   const sidePanel = el('div', { className: 'editor-side-panel panel' })
@@ -96,7 +109,7 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
   sidePanel.append(sidePanelEmpty, textArea, lineTimeRow, lineConfidenceRow)
   textArea.style.display = 'none'
 
-  root.append(header, toolbar, el('div', { className: 'editor-main' }, [scrollArea, sidePanel]))
+  root.append(header, toolbar, el('div', { className: 'editor-main' }, [scrollArea, playheadIndicator, sidePanel]))
 
   // ---------- 状態 ----------
   function state() {
@@ -117,7 +130,7 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
   }
   function totalDurationSec(): number {
     const a = state().audio
-    return a.playbackBuffer?.duration ?? a.analysisBuffer?.duration ?? 0
+    return a.playbackBuffer?.duration ?? a.analysisBuffer?.duration ?? a.originalBuffer?.duration ?? 0
   }
   function displayOffsetSec(): number {
     return (state().project?.playback.offsetMs ?? 0) / 1000
@@ -132,6 +145,9 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
     const width = Math.max(1, totalDurationSec() * pps())
     ribbonSvgWrap.style.width = `${width}px`
     ribbonSvgWrap.style.height = `${RIBBON_HEIGHT}px`
+    // タイムライン末尾より先まで手動スクロールできるよう、trackの幅にだけ余白を足す
+    // (ribbon/blocks/boundary各レイヤー自体の描画幅は音源長のままでよい)
+    track.style.minWidth = `${width + SCROLL_END_PADDING_PX}px`
 
     const ns = 'http://www.w3.org/2000/svg'
     const svg = document.createElementNS(ns, 'svg')
@@ -746,7 +762,11 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
     const t = playheadDisplaySec()
     playhead.style.transform = `translateX(${xForTime(t)}px)`
     timeLabel.textContent = formatTime(t)
-    autoScrollToPlayhead(t)
+    // 再生中だけ追従スクロールする。一時停止中も無条件に実行すると、手動でタイムラインを
+    // 見て回ろうとしても毎フレーム再生バー付近へ引き戻されてしまい、再生バーが無い場所まで
+    // スクロールできない不具合になっていた(実機で報告)。
+    if (ctx.playback.isPlaying()) autoScrollToPlayhead(t)
+    updatePlayheadOffscreenIndicator(t)
   }
 
   function autoScrollToPlayhead(t: number): void {
@@ -755,6 +775,25 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
     const viewRight = viewLeft + scrollArea.clientWidth
     if (x < viewLeft + 40) scrollArea.scrollLeft = Math.max(0, x - 40)
     else if (x > viewRight - 40) scrollArea.scrollLeft = x - scrollArea.clientWidth + 40
+  }
+
+  // 手動スクロールで再生バーが画面外になった時、左右どちら側にあるか示すインジケーター。
+  // クリックすると再生バーへスクロールし直す。
+  function updatePlayheadOffscreenIndicator(t: number): void {
+    const x = xForTime(t)
+    const viewLeft = scrollArea.scrollLeft
+    const viewRight = viewLeft + scrollArea.clientWidth
+    if (x < viewLeft) {
+      playheadIndicator.textContent = '◀ 再生バー'
+      playheadIndicator.classList.add('visible', 'left')
+      playheadIndicator.classList.remove('right')
+    } else if (x > viewRight) {
+      playheadIndicator.textContent = '再生バー ▶'
+      playheadIndicator.classList.add('visible', 'right')
+      playheadIndicator.classList.remove('left')
+    } else {
+      playheadIndicator.classList.remove('visible', 'left', 'right')
+    }
   }
 
   let rafId: number | null = null
@@ -792,13 +831,12 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
     selectLine(null)
   })
 
-  // ---------- ソース切替 ----------
+  // ---------- ソース切替(§4.10 音声パターン) ----------
   sourceSelect.value = state().playSource
   sourceSelect.addEventListener('change', () => {
-    const src = sourceSelect.value as 'playback' | 'analysis'
+    const src = sourceSelect.value as PlaySource
     ctx.editor.store.setState({ playSource: src })
-    const s = state()
-    ctx.playback.setBuffer(src === 'analysis' ? s.audio.analysisBuffer : s.audio.playbackBuffer ?? s.audio.analysisBuffer)
+    ctx.playback.setBuffer(bufferForSource(state().audio, src))
   })
 
   // ---------- ガイド・スナップ切替 ----------

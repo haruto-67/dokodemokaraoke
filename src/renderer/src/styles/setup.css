@@ -14,6 +14,9 @@
   display: flex;
   align-items: center;
   gap: 16px;
+  /* .setup-screenの左padding(56px)だけではmacOSの信号機ボタン領域と近すぎるため上乗せする
+     (editor-headerと同じ理由、実機で編集画面での重なりが報告されたのを機に確認) */
+  padding-left: 24px;
   -webkit-app-region: drag;
 }
 

@@ -1,4 +1,5 @@
 import type { AppContext } from '../appContext'
+import type { PlaySource } from '@shared/types'
 import { el } from '../lib/dom'
 import { notifyError } from '../lib/projectActions'
 import { listMicInputDevices, MicPermissionError, startMicPitchDetection, type MicPitchSession } from '../audio/micPitchInput'
@@ -72,10 +73,12 @@ export function mountSettingsModal(root: HTMLElement, ctx: AppContext): void {
   // --- 本番画面の既定再生ソース ---
   const sourceRow = settingsRow('本番画面の既定再生ソース')
   const sourceSelect = el('select', { className: 'editor-select' }) as HTMLSelectElement
-  sourceSelect.append(el('option', { value: 'playback' }, ['オフボーカル']), el('option', { value: 'analysis' }, ['オンボーカル']))
-  sourceSelect.addEventListener('change', () =>
-    void patchSettings({ defaultPerformSource: sourceSelect.value as 'playback' | 'analysis' })
+  sourceSelect.append(
+    el('option', { value: 'playback' }, ['オフボーカル']),
+    el('option', { value: 'original' }, ['オンボーカル']),
+    el('option', { value: 'analysis' }, ['ボーカルのみ'])
   )
+  sourceSelect.addEventListener('change', () => void patchSettings({ defaultPerformSource: sourceSelect.value as PlaySource }))
   sourceRow.control.appendChild(sourceSelect)
 
   // --- カウントイン ---

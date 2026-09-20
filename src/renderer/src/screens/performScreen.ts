@@ -1,9 +1,10 @@
 import type { AppContext } from '../appContext'
 import type { ScreenHandle } from '../lib/screen'
 import { el, clear, formatTime } from '../lib/dom'
-import { DEFAULT_HOP_SEC, type DokokaraLine, type DokokaraToken } from '@shared/types'
+import type { DokokaraLine, DokokaraToken, PlaySource } from '@shared/types'
 import { scorePerformance, type SungPitchSample } from '@shared/analysis/scoring'
 import { startMicPitchDetection, type MicPitchSession } from '../audio/micPitchInput'
+import { bufferForSource } from '../lib/projectActions'
 
 const INTERLUDE_THRESHOLD_SEC = 4
 const CONTROLS_FADE_MS = 2500
@@ -13,6 +14,11 @@ const PITCH_STRIP_MIN_HZ = 70
 const PITCH_STRIP_MAX_HZ = 1100
 /** マイク未許可等の通知を表示し続ける時間(ms)。オフセット表示と同じ演出を流用 */
 const MIC_NOTICE_DURATION_MS = 4000
+
+/** MIDIノート番号(小数可)→Hz変換(お手本メロディのノート単位描画に使う) */
+function midiToHz(midi: number): number {
+  return 440 * Math.pow(2, (midi - 69) / 12)
+}
 
 /** ピッチガイド(参照メロディ・歌唱ピッチ共通)のHz→縦位置変換 */
 function yForHz(hz: number): number {
@@ -57,14 +63,19 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
 
   // ---------- コントロール ----------
   const controls = el('div', { className: 'perform-controls' })
+  const homeBtn = el('button', { className: 'btn btn-ghost' }, ['ホームへ'])
   const backBtn = el('button', { className: 'btn btn-ghost' }, ['← 編集へ戻る'])
   const playBtn = el('button', { className: 'btn btn-ghost' }, ['▶'])
   const restartBtn = el('button', { className: 'btn btn-ghost' }, ['⏮ 最初から'])
   const sourceSelect = el('select', { className: 'editor-select' }) as HTMLSelectElement
-  sourceSelect.append(el('option', { value: 'playback' }, ['オフボーカル']), el('option', { value: 'analysis' }, ['オンボーカル']))
+  sourceSelect.append(
+    el('option', { value: 'playback' }, ['オフボーカル']),
+    el('option', { value: 'original' }, ['オンボーカル']),
+    el('option', { value: 'analysis' }, ['ボーカルのみ'])
+  )
   const fullscreenBtn = el('button', { className: 'btn btn-ghost' }, ['⛶ フルスクリーン'])
   const timeLabel = el('span', { className: 'mono perform-time' }, ['0:00.00'])
-  controls.append(backBtn, playBtn, restartBtn, sourceSelect, fullscreenBtn, timeLabel)
+  controls.append(homeBtn, backBtn, playBtn, restartBtn, sourceSelect, fullscreenBtn, timeLabel)
 
   const offsetIndicator = el('div', { className: 'perform-offset-indicator' })
   const micNotice = el('div', { className: 'perform-mic-notice' })
@@ -136,6 +147,7 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
   ctx.playback.onEnded(finishAndShowResult)
 
   // ---------- ナビゲーション・再生操作 ----------
+  homeBtn.addEventListener('click', () => ctx.navigate('home'))
   backBtn.addEventListener('click', () => ctx.navigate('editor'))
   function togglePlay(): void {
     if (ctx.playback.isPlaying()) {
@@ -155,10 +167,9 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
 
   sourceSelect.value = state().playSource
   sourceSelect.addEventListener('change', () => {
-    const src = sourceSelect.value as 'playback' | 'analysis'
+    const src = sourceSelect.value as PlaySource
     ctx.editor.store.setState({ playSource: src })
-    const s = state()
-    ctx.playback.setBuffer(src === 'analysis' ? s.audio.analysisBuffer : s.audio.playbackBuffer ?? s.audio.analysisBuffer)
+    ctx.playback.setBuffer(bufferForSource(state().audio, src))
   })
 
   function toggleFullscreen(): void {
@@ -267,12 +278,14 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
 
   // ---------- ピッチガイド描画(初回のみ全体を構築し、以後はtransformでスクロール) ----------
   const PPS = 80
+  // ノート間をこの秒数以内なら段差(縦線)で繋ぐ。これを超える間隔は無音区間とみなし空白のままにする。
+  const NOTE_CONNECT_THRESHOLD_SEC = 0.3
+
   function renderPitchStrip(): void {
     clear(pitchStripInner)
     const s = state()
-    const pitchHz = s.pitchHz
-    const hopSec = s.project?.analysis.hopSec ?? DEFAULT_HOP_SEC
-    if (!pitchHz || pitchHz.length === 0) return
+    const notes = s.project?.analysis.notes ?? []
+    if (notes.length === 0) return
 
     const width = Math.max(1, totalDurationSec() * PPS)
     pitchStripInner.style.width = `${width}px`
@@ -283,19 +296,24 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
     svg.setAttribute('width', String(width))
     svg.setAttribute('height', String(PITCH_STRIP_HEIGHT))
 
-    const step = Math.max(1, Math.floor(1 / Math.max(1, PPS * hopSec)))
+    // お手本メロディを、ノート(§4.4.4、RMVPE→Basic Pitchで既に量子化済み)単位の水平バーで
+    // 描画する(DAM等の採点画面のような「階段状」の見た目、実データ・タイミング計算には
+    // 一切手を入れず縦方向の描画方法だけを変更する)。連続する2ノートの間隔が十分短ければ
+    // 縦線で段差を繋ぎ、無音区間(間隔が大きい)は空白のままにする。
     let d = ''
-    let penDown = false
-    for (let i = 0; i < pitchHz.length; i += step) {
-      const hz = pitchHz[i]
-      if (hz <= 0) {
-        penDown = false
-        continue
+    for (let i = 0; i < notes.length; i++) {
+      const note = notes[i]
+      const xStart = note.start * PPS
+      const xEnd = note.end * PPS
+      const y = yForHz(midiToHz(note.pitchMidi))
+      d += `M${xStart.toFixed(1)},${y.toFixed(1)} L${xEnd.toFixed(1)},${y.toFixed(1)} `
+
+      const next = notes[i + 1]
+      if (next && next.start - note.end <= NOTE_CONNECT_THRESHOLD_SEC) {
+        const xNextStart = next.start * PPS
+        const yNext = yForHz(midiToHz(next.pitchMidi))
+        d += `L${xNextStart.toFixed(1)},${y.toFixed(1)} L${xNextStart.toFixed(1)},${yNext.toFixed(1)} `
       }
-      const x = i * hopSec * PPS
-      const y = yForHz(hz)
-      d += `${penDown ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)} `
-      penDown = true
     }
     const path = document.createElementNS(ns, 'path')
     path.setAttribute('d', d)

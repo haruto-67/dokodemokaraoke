@@ -11,7 +11,9 @@
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 16px 24px;
+  /* 左paddingはmacOSのtitleBarStyle:'hiddenInset'による信号機ボタン(閉じる/しまう/拡大)の
+     占有領域と「← ホームへ」ボタンが重ならないようにするための余白(実機で重なりを確認) */
+  padding: 16px 24px 16px 84px;
   border-bottom: 1px solid var(--color-border);
   -webkit-app-region: drag;
 }
@@ -72,6 +74,34 @@
   flex: 1;
   display: flex;
   min-height: 0;
+  position: relative;
+}
+
+.editor-playhead-indicator {
+  position: absolute;
+  top: 12px;
+  padding: 6px 12px;
+  border-radius: var(--radius-input);
+  background: var(--color-accent);
+  color: #150f26;
+  font-size: 12px;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+  z-index: 5;
+}
+.editor-playhead-indicator.visible {
+  opacity: 0.95;
+  pointer-events: auto;
+}
+.editor-playhead-indicator.left {
+  left: 12px;
+}
+.editor-playhead-indicator.right {
+  right: 12px;
 }
 
 .editor-track-scroll {

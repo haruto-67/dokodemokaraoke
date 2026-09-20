@@ -2,7 +2,7 @@ import type { AppContext } from '../appContext'
 import type { ScreenHandle } from '../lib/screen'
 import { el, clear, formatDateTime, formatTime } from '../lib/dom'
 import type { ProjectSummary } from '@shared/types'
-import { openProjectByPath, createNewProjectFlow } from '../lib/projectActions'
+import { openProjectByPath, openProjectByPathForPerform, createNewProjectFlow } from '../lib/projectActions'
 
 type SortKey = 'updatedAt' | 'createdAt' | 'name'
 
@@ -129,6 +129,12 @@ export function mountHomeScreen(container: HTMLElement, ctx: AppContext): Screen
     const openBtn = el('button', { className: 'btn btn-ghost' }, ['開く'])
     openBtn.addEventListener('click', () => openProjectByPath(ctx, summary.filePath))
 
+    const performBtn = el('button', { className: 'btn btn-ghost' }, ['▶ 本番で開く'])
+    performBtn.addEventListener('click', (e) => {
+      e.stopPropagation()
+      void openProjectByPathForPerform(ctx, summary.filePath)
+    })
+
     const dupBtn = el('button', { className: 'btn btn-ghost' }, ['複製'])
     dupBtn.addEventListener('click', async (e) => {
       e.stopPropagation()
@@ -154,7 +160,7 @@ export function mountHomeScreen(container: HTMLElement, ctx: AppContext): Screen
       await ctx.refreshHome()
     })
 
-    actions.append(openBtn, dupBtn, renameBtn, delBtn)
+    actions.append(openBtn, performBtn, dupBtn, renameBtn, delBtn)
     card.append(thumb, body, actions)
     card.addEventListener('dblclick', () => openProjectByPath(ctx, summary.filePath))
     return card

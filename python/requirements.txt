@@ -37,3 +37,17 @@ melband-roformer-infer==0.1.5
 # 動作確認ステップで一度g2pを呼び、ビルド時点で辞書取得まで完了させている
 # (パッケージ後のアプリ実行時に改めてネットワークへ問い合わせることはない)。
 pyopenjtalk==0.4.1
+
+# 歌詞行リスト全体を曲全体の音声に一括アライメントする(§4.4.7、VAD区間ごとの
+# min(N,M)対応付けだと区間数のズレで歌詞行が丸ごとズレる問題の解決策)。
+# ESPnetチーム実装(Apache-2.0)。Cython拡張(ctc_segmentation_dyn)を同梱するが、
+# 1.7.4時点でNumPy 2.x環境だと`numpy.import_array()`未呼び出しに起因する
+# ImportErrorで動かない(アップストレームの既知の問題、2026-09時点で未修正)。
+# そのため下のnumpy<2ピン留めとセットで使う。
+ctc-segmentation==1.7.4
+
+# ctc-segmentationのCython拡張がNumPy 2.x環境で動かないため<2に固定する
+# (torch/basic-pitch/mel-band-roformer等、他の全依存パッケージはnumpy<2でも
+# 問題無く動作することを実機で確認済み)。将来ctc-segmentation側でNumPy 2対応が
+# 入ったら、このピン留めと合わせて見直すこと。
+numpy<2

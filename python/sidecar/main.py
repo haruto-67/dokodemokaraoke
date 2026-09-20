@@ -8,15 +8,19 @@ Electronのメインプロセスと stdin/stdout 経由でJSON-RPC風メッセ�
 - STEP2 ボーカル/伴奏分離(Mel-Band RoFormer) -- separation.py
 - STEP3 F0抽出(RMVPE) -- rmvpe_model.py
 - STEP4 ノート化(Basic Pitch連携) -- f0_notes.py
-- STEP5 フレーズ区間検出(Silero VAD) -- vad.py
-- STEP6/7 モーラ読み変換・CTC forced align(wav2vec2) -- lyrics_align.py
+- STEP5/6/7 歌詞行リストの一括タイミング付け(モーラ読み変換+ctc-segmentation) -- lyrics_align.py
 
 STEP1(音源取得の正規化)は未実装。
 
-歌詞行(1行=1フレーズ、§4.5)とSTEP5で検出した音響フレーズ区間は、時系列の
-出現順で1対1に対応付ける(区間数と行数が一致しない場合はmin(区間数,行数)
-分だけ対応させ、残りはアライメントされないまま返す。完全自動を目標とせず
-手修正前提とする要件定義書v3 §4.4.7の方針に沿った単純化)。
+歌詞タイミング付けは、歌詞行N行を「曲全体のvocals音声」に対して一括で
+アライメントする(ctc-segmentation使用)。旧実装はSilero VADで先にフレーズ
+区間を検出し、歌詞行と時系列の出現順でmin(N,M)対応付けていたが、VADが
+想定と違う個数に区切ると、そこから後ろの行が丸ごとズレる問題があった
+(実機で「音程は正しいのに歌詞が付いていない箇所がある」という形で発現)。
+ctc-segmentationは歌詞行が時系列順に出現するという前提だけで曲全体に
+アライメントできるため、区間数のズレという概念自体が発生しない。
+vad.pyはこの用途では使わなくなったが、ファイル自体は削除せず残している
+(テスト済みで他用途に転用しうるため)。詳細は[[どこカラv3の技術選定]]参照。
 
 標準ライブラリ以外の重い依存(torch等)は `separation`/`rmvpe_model` モジュール内
 でのみimportする(起動・疎通確認だけならtorch無しでも動くようにするため)。
@@ -79,12 +83,12 @@ def handle_analyze(req: dict) -> None:
     import vad
     from rmvpe_model import RMVPE
     from f0_notes import notes_from_f0
-    from lyrics_align import align_tokens_to_audio, text_to_hiragana_reading, Wav2Vec2Vocab
+    from lyrics_align import align_lyrics_lines_to_song
 
     vocal_label = "ボーカル/伴奏分離(Mel-Band RoFormer)"
     pitch_label = "F0抽出・ノート化(RMVPE+Basic Pitch)"
     phrase_label = "フレーズ区間検出(Silero VAD)"
-    align_label = "歌詞のタイミング付け(モーラ読み+wav2vec2 forced align)"
+    align_label = "歌詞のタイミング付け(モーラ読み+ctc-segmentation)"
 
     _send_progress(req_id, "vocalIsolation", vocal_label, 0.0, "running")
     try:
@@ -123,6 +127,9 @@ def handle_analyze(req: dict) -> None:
     _send_progress(req_id, "pitch", pitch_label, 1.0, "done")
 
     # STEP5: フレーズ区間検出(Silero VAD)。STEP3で作った16kHzモノラルのvocals_audioを再利用する。
+    # 歌詞タイミング付け自体(STEP6/7)はもうこのphrase_segmentsを使わない(後述)が、
+    # 編集画面のフレーズ境界ガイド線・スナップ対象(editorScreen.tsのSNAP_PRIORITY.
+    # phraseBoundary)としては引き続き有用なため、検出自体は残す判断とした。
     _send_progress(req_id, "phrase", phrase_label, 0.0, "running")
     try:
         phrase_segments = vad.detect_phrases(vocals_audio.astype("float32"), paths.model_path("silero_vad.jit"))
@@ -131,48 +138,17 @@ def handle_analyze(req: dict) -> None:
         return
     _send_progress(req_id, "phrase", phrase_label, 1.0, "done")
 
-    # STEP6/7: 歌詞行ごとにモーラ読みへ変換し、対応するフレーズ区間内でforced alignする。
-    # 歌詞行(N)と検出区間(M)は時系列の出現順でmin(N,M)行分だけ対応させる
-    # (要件定義書v3 §4.4.7: 完全自動を目標とせず手修正前提のため単純な対応付けでよい)。
+    # STEP6/7: 歌詞行リスト全体を、曲全体のvocals音声に一括アライメントする(ctc-segmentation)。
+    # 旧実装(VAD検出区間とmin(歌詞行数,検出区間数)で1対1対応付け)は、VADが想定と違う個数に
+    # フレーズを区切ると、そこから後ろの行が丸ごとズレる問題があった。歌詞行は曲中で必ず
+    # 時系列順に出現するという前提だけに依存する一括アライメント方式に置き換えることで、
+    # 区間数のズレという概念自体を無くす。詳細は[[どこカラv3の技術選定]]参照。
     _send_progress(req_id, "assign", align_label, 0.0, "running")
-    aligned_lines = []
     try:
-        vocab = Wav2Vec2Vocab()
-        wav2vec2_path = paths.model_path("japanese-wav2vec2-base-rs35kh.safetensors")
-        pair_count = min(len(lyrics_lines), len(phrase_segments))
-        for i in range(pair_count):
-            line_text = lyrics_lines[i]
-            segment = phrase_segments[i]
-            start_sample = int(segment["start"] * RMVPE_SAMPLE_RATE)
-            end_sample = int(segment["end"] * RMVPE_SAMPLE_RATE)
-            segment_audio = vocals_audio[start_sample:end_sample].astype("float32")
-
-            reading = text_to_hiragana_reading(line_text)
-            # 文字単位のtokensはUI側のトークン粒度(§4.6.1、ルビ単位+モーラ単位の混在)と
-            # 一致しないため使わず、行全体のstart/end/信頼度だけを結果に含める
-            # (行内のトークンタイミングは既存のallocateTokenTimings(§4.6.3)に委ねる方針。
-            # 詳細は[[どこカラv3の技術選定]]参照)。
-            # 1行ごとにtry/exceptで囲む: VAD検出区間が短すぎる/歌詞行が長すぎる等の
-            # ミスマッチが原因でこの行だけ整合しないケースがあり得るが、そのために
-            # それまでの分離・F0・ノート化・フレーズ検出の結果(数分〜十数分かけた処理)を
-            # 丸ごと捨てるのは避け、その行だけconfidence=Noneとして続行する(実機で発覚)。
-            try:
-                _tokens, confidence = align_tokens_to_audio(reading, segment_audio, wav2vec2_path, vocab=vocab)
-            except Exception:  # noqa: BLE001 -- この行だけ諦めて続行する
-                # AnalyzeSidecarLine.confidenceはwireプロトコル上number(非nullable)のため、
-                # align_tokens_to_audioの既存の「アライメント不能」規約(0.0)に合わせる。
-                confidence = 0.0
-
-            aligned_lines.append(
-                {
-                    "text": line_text,
-                    "start": segment["start"],
-                    "end": segment["end"],
-                    "confidence": confidence,
-                }
-            )
-            _send_progress(req_id, "assign", align_label, (i + 1) / pair_count if pair_count else 1.0, "running")
-    except Exception as exc:  # noqa: BLE001 -- ここに来るのは行単位以外(vocab読み込み失敗等)の異常
+        aligned_lines = align_lyrics_lines_to_song(
+            lyrics_lines, vocals_audio.astype("float32"), paths.model_path("japanese-wav2vec2-base-rs35kh.safetensors")
+        )
+    except Exception as exc:  # noqa: BLE001 -- 失敗理由をerrorメッセージとして呼び出し側に伝える境界
         send({"type": "error", "id": req_id, "message": f"歌詞のタイミング付けに失敗しました: {exc}"})
         return
     _send_progress(req_id, "assign", align_label, 1.0, "done")
