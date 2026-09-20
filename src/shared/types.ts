@@ -127,6 +127,9 @@ export interface AppSettings {
   countInEnabled: boolean
   /** 採点用マイク入力デバイス(§4.12.1)。nullはブラウザ既定デバイスを使う */
   micDeviceId: string | null
+  /** 入出力遅延補正(§4.12.2)。playback.offsetMs(曲ごとの字幕表示調整)とは別物で、
+   *  環境(スピーカー/マイクの組み合わせ)ごとにキャリブレーションした値をアプリ設定として保持する。 */
+  micLatencyCompensationMs: number
 }
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -138,7 +141,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   bigSeekStepSec: 5,
   defaultPerformSource: 'playback',
   countInEnabled: true,
-  micDeviceId: null
+  micDeviceId: null,
+  micLatencyCompensationMs: 0
 }
 
 // ホーム画面カード用の軽量メタデータ

@@ -2,6 +2,7 @@ import type { AppContext } from '../appContext'
 import { el } from '../lib/dom'
 import { notifyError } from '../lib/projectActions'
 import { listMicInputDevices, MicPermissionError, startMicPitchDetection, type MicPitchSession } from '../audio/micPitchInput'
+import { runLatencyCalibration } from '../audio/latencyCalibration'
 
 /**
  * 設定モーダル(§4.2, §3)。いずれの画面からも ⌘, で開ける。
@@ -140,6 +141,43 @@ export function mountSettingsModal(root: HTMLElement, ctx: AppContext): void {
     })()
   })
 
+  // --- 入出力遅延のキャリブレーション(§4.12.2) ---
+  const latencyRow = settingsRow('入出力遅延補正')
+  const latencyValueLabel = el('span', { className: 'mono settings-status-wrap' }, [''])
+  const latencyMeasureBtn = el('button', { className: 'btn btn-ghost' }, ['測定…'])
+  const latencyResetBtn = el('button', { className: 'btn btn-ghost' }, ['リセット'])
+  latencyRow.control.append(latencyValueLabel, latencyMeasureBtn, latencyResetBtn)
+
+  latencyMeasureBtn.addEventListener('click', () => {
+    void (async () => {
+      // 測定中はマイクプレビューと競合しない(同時に2系統マイクを掴むのを避ける)よう一旦止める
+      stopMicPreview()
+      latencyMeasureBtn.disabled = true
+      latencyValueLabel.textContent = '測定中…(静かな環境でお待ちください)'
+      try {
+        const deviceId = ctx.settings.getState().micDeviceId
+        const result = await runLatencyCalibration({ deviceId })
+        await patchSettings({ micLatencyCompensationMs: result.latencyMs })
+        latencyValueLabel.textContent = `${result.latencyMs}ms`
+      } catch (e) {
+        if (e instanceof MicPermissionError) {
+          latencyValueLabel.textContent = e.kind === 'permission_denied' ? 'マイクの使用が許可されていません' : e.message
+        } else {
+          latencyValueLabel.textContent = (e as Error).message || '測定に失敗しました'
+        }
+      } finally {
+        latencyMeasureBtn.disabled = false
+        await startMicPreview()
+      }
+    })()
+  })
+  latencyResetBtn.addEventListener('click', () => {
+    void (async () => {
+      await patchSettings({ micLatencyCompensationMs: 0 })
+      latencyValueLabel.textContent = '0ms'
+    })()
+  })
+
   // --- yt-dlpの更新(§4.3実装メモ: 同梱版＋任意更新。YouTube側の仕様変更で壊れやすいため) ---
   const ytDlpRow = settingsRow('yt-dlp(YouTube取り込み)')
   const ytDlpStatus = el('span', { className: 'mono settings-path' }, [''])
@@ -169,6 +207,7 @@ export function mountSettingsModal(root: HTMLElement, ctx: AppContext): void {
     sourceRow.row,
     countInRow.row,
     micRow.row,
+    latencyRow.row,
     ytDlpRow.row
   )
 
@@ -191,6 +230,7 @@ export function mountSettingsModal(root: HTMLElement, ctx: AppContext): void {
     bigSeekInput.value = String(s.bigSeekStepSec)
     sourceSelect.value = s.defaultPerformSource
     countInInput.checked = s.countInEnabled
+    latencyValueLabel.textContent = `${s.micLatencyCompensationMs}ms`
   }
 
   function syncVisibility(): void {

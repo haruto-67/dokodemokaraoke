@@ -72,6 +72,14 @@
   color: var(--color-text-weak);
 }
 
+.settings-status-wrap {
+  max-width: 220px;
+  font-size: 11px;
+  color: var(--color-text-weak);
+  white-space: normal;
+  text-align: right;
+}
+
 .settings-mic-meter {
   width: 60px;
   height: 8px;

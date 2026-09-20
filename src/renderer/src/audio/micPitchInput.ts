@@ -18,6 +18,8 @@ export interface PitchSample {
 }
 
 export interface MicPitchSession {
+  /** クリック音再生など、同じ時間軸(currentTime)で操作したい呼び出し元向けに公開する */
+  readonly audioContext: AudioContext
   stop(): void
 }
 
@@ -37,7 +39,8 @@ export class MicPermissionError extends Error {
   }
 }
 
-function toMicPermissionError(e: unknown): MicPermissionError {
+/** micClickDetection.tsでも同じgetUserMediaエラー判定を再利用するためexportする */
+export function toMicPermissionError(e: unknown): MicPermissionError {
   const err = e as DOMException
   if (err?.name === 'NotAllowedError' || err?.name === 'SecurityError') {
     return new MicPermissionError('permission_denied', 'マイクの使用が許可されていません')
@@ -87,6 +90,7 @@ export async function startMicPitchDetection(
 
   let stopped = false
   return {
+    audioContext,
     stop(): void {
       if (stopped) return
       stopped = true
