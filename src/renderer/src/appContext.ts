@@ -1,9 +1,10 @@
 import type { AppSettings, ProjectSummary } from '@shared/types'
+import type { ScoringResult } from '@shared/analysis/scoring'
 import { createEditorStore, type EditorStore } from './state/editorStore'
 import { Store } from './state/store'
 import { PlaybackEngine } from './lib/audio'
 
-export type ScreenName = 'home' | 'setup' | 'analyzing' | 'editor' | 'perform'
+export type ScreenName = 'home' | 'setup' | 'analyzing' | 'editor' | 'perform' | 'result'
 
 export interface NavigateParams {
   // setup 画面: 既存プロジェクトを開いた直後に渡す場合など
@@ -44,6 +45,8 @@ export interface UiState {
   settingsOpen: boolean
   homeSummaries: ProjectSummary[]
   setupDraft: SetupDraft
+  /** リザルト画面(§4.12.4)へ渡す採点結果。プロジェクトには保存せず、その場限りの表示に使う */
+  lastScoreResult: ScoringResult | null
 }
 
 export interface AppContext {
@@ -63,7 +66,8 @@ export function createAppContext(initialSettings: AppSettings): AppContext {
     screen: 'home',
     settingsOpen: false,
     homeSummaries: [],
-    setupDraft: emptySetupDraft()
+    setupDraft: emptySetupDraft(),
+    lastScoreResult: null
   })
   const settings = new Store<AppSettings>(initialSettings)
   const playback = new PlaybackEngine()

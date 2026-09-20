@@ -51,6 +51,22 @@
   box-shadow: 0 0 10px rgba(255, 255, 255, 0.9);
 }
 
+.perform-live-pitch-dot {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  margin-left: -6px;
+  margin-top: -6px;
+  border-radius: 50%;
+  background: var(--color-accent-2);
+  box-shadow: 0 0 8px var(--color-accent-2);
+  opacity: 0;
+  transition: top 60ms linear;
+}
+.perform-live-pitch-dot.visible {
+  opacity: 1;
+}
+
 .perform-lyrics {
   display: flex;
   flex-direction: column;
@@ -175,5 +191,22 @@
   transition: opacity 0.2s ease;
 }
 .perform-offset-indicator.visible {
+  opacity: 1;
+}
+
+.perform-mic-notice {
+  position: absolute;
+  top: 24px;
+  left: 24px;
+  padding: 8px 14px;
+  border-radius: var(--radius-input);
+  background: rgba(37, 28, 64, 0.9);
+  border: 1px solid var(--color-border);
+  font-size: 13px;
+  color: var(--color-text-weak);
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+.perform-mic-notice.visible {
   opacity: 1;
 }

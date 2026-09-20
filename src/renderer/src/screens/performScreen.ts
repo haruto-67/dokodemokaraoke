@@ -2,11 +2,25 @@ import type { AppContext } from '../appContext'
 import type { ScreenHandle } from '../lib/screen'
 import { el, clear, formatTime } from '../lib/dom'
 import { DEFAULT_HOP_SEC, type DokokaraLine, type DokokaraToken } from '@shared/types'
+import { scorePerformance, type SungPitchSample } from '@shared/analysis/scoring'
+import { startMicPitchDetection, type MicPitchSession } from '../audio/micPitchInput'
 
 const INTERLUDE_THRESHOLD_SEC = 4
 const CONTROLS_FADE_MS = 2500
 const PITCH_STRIP_HEIGHT = 90
 const PITCH_STRIP_MARKER_FRACTION = 0.2
+const PITCH_STRIP_MIN_HZ = 70
+const PITCH_STRIP_MAX_HZ = 1100
+/** マイク未許可等の通知を表示し続ける時間(ms)。オフセット表示と同じ演出を流用 */
+const MIC_NOTICE_DURATION_MS = 4000
+
+/** ピッチガイド(参照メロディ・歌唱ピッチ共通)のHz→縦位置変換 */
+function yForHz(hz: number): number {
+  const clamped = Math.min(PITCH_STRIP_MAX_HZ, Math.max(PITCH_STRIP_MIN_HZ, hz))
+  const frac =
+    (Math.log2(clamped) - Math.log2(PITCH_STRIP_MIN_HZ)) / (Math.log2(PITCH_STRIP_MAX_HZ) - Math.log2(PITCH_STRIP_MIN_HZ))
+  return PITCH_STRIP_HEIGHT - 8 - frac * (PITCH_STRIP_HEIGHT - 16)
+}
 
 /**
  * 本番(カラオケ再生)画面(§3 画面 #4, §4.10)。
@@ -27,7 +41,9 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
   const pitchStripWrap = el('div', { className: 'perform-pitch-strip' })
   const pitchStripInner = el('div', { className: 'perform-pitch-strip-inner' })
   const pitchMarker = el('div', { className: 'perform-pitch-marker' })
-  pitchStripWrap.append(pitchStripInner, pitchMarker)
+  // 採点用: 歌唱ピッチのリアルタイム表示(§4.12.4)
+  const livePitchDot = el('div', { className: 'perform-live-pitch-dot' })
+  pitchStripWrap.append(pitchStripInner, pitchMarker, livePitchDot)
 
   // ---------- 歌詞表示 ----------
   const lyricsArea = el('div', { className: 'perform-lyrics' })
@@ -51,8 +67,9 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
   controls.append(backBtn, playBtn, restartBtn, sourceSelect, fullscreenBtn, timeLabel)
 
   const offsetIndicator = el('div', { className: 'perform-offset-indicator' })
+  const micNotice = el('div', { className: 'perform-mic-notice' })
 
-  root.append(progressBar, pitchStripWrap, lyricsArea, countdownEl, controls, offsetIndicator)
+  root.append(progressBar, pitchStripWrap, lyricsArea, countdownEl, controls, offsetIndicator, micNotice)
 
   // ---------- 状態ヘルパー ----------
   function state() {
@@ -70,6 +87,53 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
   function totalDurationSec(): number {
     return ctx.playback.duration
   }
+
+  // ---------- 採点用マイク入力(§4.12.1/4.12.2) ----------
+  let micSession: MicPitchSession | null = null
+  let liveSungHz = 0
+  const sungPitchSamples: SungPitchSample[] = []
+
+  function showMicNotice(text: string): void {
+    micNotice.textContent = text
+    micNotice.classList.add('visible')
+    setTimeout(() => micNotice.classList.remove('visible'), MIC_NOTICE_DURATION_MS)
+  }
+
+  async function setupScoring(): Promise<void> {
+    const settings = ctx.settings.getState()
+    try {
+      const session = await startMicPitchDetection(
+        (sample) => {
+          liveSungHz = sample.hz
+          const latencySec = ctx.settings.getState().micLatencyCompensationMs / 1000
+          // playback(参照メロディ)のcurrentTimeをそのまま基準にする。表示用のdisplayOffsetSec()は
+          // 字幕/ピッチガイド表示のためのユーザー調整値であり、採点の基準時刻には使わない(§4.12.2)。
+          sungPitchSamples.push({ timeSec: ctx.playback.getCurrentTime() - latencySec, hz: sample.hz })
+        },
+        { deviceId: settings.micDeviceId }
+      )
+      if (disposed) {
+        session.stop()
+        return
+      }
+      micSession = session
+    } catch {
+      // マイク権限拒否・デバイス無し等: 採点なしで本番再生を続行する(§4.12.1)
+      if (!disposed) showMicNotice('マイクが利用できないため、採点なしで再生します')
+    }
+  }
+  void setupScoring()
+
+  function finishAndShowResult(): void {
+    micSession?.stop()
+    micSession = null
+    const s = state()
+    const notes = s.project?.analysis.notes ?? []
+    const result = scorePerformance(notes, sungPitchSamples)
+    ctx.ui.setState({ lastScoreResult: result })
+    ctx.navigate('result')
+  }
+  ctx.playback.onEnded(finishAndShowResult)
 
   // ---------- ナビゲーション・再生操作 ----------
   backBtn.addEventListener('click', () => ctx.navigate('editor'))
@@ -219,13 +283,6 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
     svg.setAttribute('width', String(width))
     svg.setAttribute('height', String(PITCH_STRIP_HEIGHT))
 
-    const yForHz = (hz: number): number => {
-      const minHz = 70
-      const maxHz = 1100
-      const clamped = Math.min(maxHz, Math.max(minHz, hz))
-      const frac = (Math.log2(clamped) - Math.log2(minHz)) / (Math.log2(maxHz) - Math.log2(minHz))
-      return PITCH_STRIP_HEIGHT - 8 - frac * (PITCH_STRIP_HEIGHT - 16)
-    }
     const step = Math.max(1, Math.floor(1 / Math.max(1, PPS * hopSec)))
     let d = ''
     let penDown = false
@@ -256,6 +313,18 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
     const markerX = pitchStripWrap.clientWidth * PITCH_STRIP_MARKER_FRACTION
     pitchStripInner.style.transform = `translateX(${(markerX - t * PPS).toFixed(1)}px)`
     pitchMarker.style.left = `${markerX}px`
+    updateLivePitchDot(markerX)
+  }
+
+  // 採点用: 現在(=pitchMarkerの位置)の歌唱ピッチをお手本メロディに重ねて表示する(§4.12.4)
+  function updateLivePitchDot(markerX: number): void {
+    if (liveSungHz <= 0) {
+      livePitchDot.classList.remove('visible')
+      return
+    }
+    livePitchDot.classList.add('visible')
+    livePitchDot.style.left = `${markerX}px`
+    livePitchDot.style.top = `${yForHz(liveSungHz)}px`
   }
 
   // ---------- メインループ ----------
@@ -314,6 +383,9 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
   return {
     unmount() {
       disposed = true
+      ctx.playback.onEnded(null)
+      micSession?.stop()
+      micSession = null
       if (rafId !== null) cancelAnimationFrame(rafId)
       if (fadeTimer) clearTimeout(fadeTimer)
       if (offsetIndicatorTimer) clearTimeout(offsetIndicatorTimer)

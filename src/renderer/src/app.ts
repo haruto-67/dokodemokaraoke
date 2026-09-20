@@ -6,13 +6,15 @@ import { mountSetupScreen } from './screens/setupScreen'
 import { mountAnalyzingScreen } from './screens/analyzingScreen'
 import { mountEditorScreen } from './screens/editorScreen'
 import { mountPerformScreen } from './screens/performScreen'
+import { mountResultScreen } from './screens/resultScreen'
 
 const SCREEN_MOUNTS: Record<ScreenName, ScreenMount> = {
   home: mountHomeScreen,
   setup: mountSetupScreen,
   analyzing: mountAnalyzingScreen,
   editor: mountEditorScreen,
-  perform: mountPerformScreen
+  perform: mountPerformScreen,
+  result: mountResultScreen
 }
 
 /**
