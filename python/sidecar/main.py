@@ -8,9 +8,15 @@ Electronのメインプロセスと stdin/stdout 経由でJSON-RPC風メッセ�
 - STEP2 ボーカル/伴奏分離(Mel-Band RoFormer) -- separation.py
 - STEP3 F0抽出(RMVPE) -- rmvpe_model.py
 - STEP4 ノート化(Basic Pitch連携) -- f0_notes.py
+- STEP5 フレーズ区間検出(Silero VAD) -- vad.py
+- STEP6/7 モーラ読み変換・CTC forced align(wav2vec2) -- lyrics_align.py
 
-STEP1(音源取得の正規化)・STEP5〜7(歌詞アライメント)は
-未実装。`analyze` はそれらが揃うまで、分離結果・F0・ノート列のみを返す。
+STEP1(音源取得の正規化)は未実装。
+
+歌詞行(1行=1フレーズ、§4.5)とSTEP5で検出した音響フレーズ区間は、時系列の
+出現順で1対1に対応付ける(区間数と行数が一致しない場合はmin(区間数,行数)
+分だけ対応させ、残りはアライメントされないまま返す。完全自動を目標とせず
+手修正前提とする要件定義書v3 §4.4.7の方針に沿った単純化)。
 
 標準ライブラリ以外の重い依存(torch等)は `separation`/`rmvpe_model` モジュール内
 でのみimportする(起動・疎通確認だけならtorch無しでも動くようにするため)。
@@ -54,6 +60,7 @@ def handle_analyze(req: dict) -> None:
     try:
         source_audio_path = Path(params["sourceAudioPath"])
         work_dir = Path(params["workDir"])
+        lyrics_lines = params.get("lyricsLines", [])
     except KeyError as exc:
         send({"type": "error", "id": req_id, "message": f"analyzeパラメータが不足しています: {exc}"})
         return
@@ -63,11 +70,15 @@ def handle_analyze(req: dict) -> None:
 
     import paths
     import separation
+    import vad
     from rmvpe_model import RMVPE
     from f0_notes import notes_from_f0
+    from lyrics_align import align_tokens_to_audio, text_to_hiragana_reading, Wav2Vec2Vocab
 
     vocal_label = "ボーカル/伴奏分離(Mel-Band RoFormer)"
     pitch_label = "F0抽出・ノート化(RMVPE+Basic Pitch)"
+    phrase_label = "フレーズ区間検出(Silero VAD)"
+    align_label = "歌詞のタイミング付け(モーラ読み+wav2vec2 forced align)"
 
     _send_progress(req_id, "vocalIsolation", vocal_label, 0.0, "running")
     try:
@@ -105,8 +116,52 @@ def handle_analyze(req: dict) -> None:
         return
     _send_progress(req_id, "pitch", pitch_label, 1.0, "done")
 
-    # STEP5以降(歌詞アライメント)は後続タスクで実装する。
-    # 現時点ではSTEP2〜4の生成物のみを返す。
+    # STEP5: フレーズ区間検出(Silero VAD)。STEP3で作った16kHzモノラルのvocals_audioを再利用する。
+    _send_progress(req_id, "phrase", phrase_label, 0.0, "running")
+    try:
+        phrase_segments = vad.detect_phrases(vocals_audio.astype("float32"), paths.model_path("silero_vad.jit"))
+    except Exception as exc:  # noqa: BLE001 -- 同上
+        send({"type": "error", "id": req_id, "message": f"フレーズ区間検出に失敗しました: {exc}"})
+        return
+    _send_progress(req_id, "phrase", phrase_label, 1.0, "done")
+
+    # STEP6/7: 歌詞行ごとにモーラ読みへ変換し、対応するフレーズ区間内でforced alignする。
+    # 歌詞行(N)と検出区間(M)は時系列の出現順でmin(N,M)行分だけ対応させる
+    # (要件定義書v3 §4.4.7: 完全自動を目標とせず手修正前提のため単純な対応付けでよい)。
+    _send_progress(req_id, "assign", align_label, 0.0, "running")
+    aligned_lines = []
+    try:
+        vocab = Wav2Vec2Vocab()
+        wav2vec2_path = paths.model_path("japanese-wav2vec2-base-rs35kh.safetensors")
+        pair_count = min(len(lyrics_lines), len(phrase_segments))
+        for i in range(pair_count):
+            line_text = lyrics_lines[i]
+            segment = phrase_segments[i]
+            start_sample = int(segment["start"] * RMVPE_SAMPLE_RATE)
+            end_sample = int(segment["end"] * RMVPE_SAMPLE_RATE)
+            segment_audio = vocals_audio[start_sample:end_sample].astype("float32")
+
+            reading = text_to_hiragana_reading(line_text)
+            tokens, confidence = align_tokens_to_audio(reading, segment_audio, wav2vec2_path, vocab=vocab)
+            for token in tokens:
+                token["start"] += segment["start"]
+                token["end"] += segment["start"]
+
+            aligned_lines.append(
+                {
+                    "text": line_text,
+                    "start": segment["start"],
+                    "end": segment["end"],
+                    "confidence": confidence,
+                    "tokens": tokens,
+                }
+            )
+            _send_progress(req_id, "assign", align_label, (i + 1) / pair_count if pair_count else 1.0, "running")
+    except Exception as exc:  # noqa: BLE001 -- 同上
+        send({"type": "error", "id": req_id, "message": f"歌詞のタイミング付けに失敗しました: {exc}"})
+        return
+    _send_progress(req_id, "assign", align_label, 1.0, "done")
+
     send(
         {
             "type": "done",
@@ -116,6 +171,8 @@ def handle_analyze(req: dict) -> None:
                 "instrumentalPath": str(instrumental_path),
                 "f0Path": str(f0_path),
                 "notes": notes,
+                "phraseSegments": phrase_segments,
+                "lyrics": aligned_lines,
             },
         }
     )

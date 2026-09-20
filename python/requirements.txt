@@ -25,3 +25,15 @@ basic-pitch==0.4.0
 # アーキテクチャ用YAML設定(config_vocals_mel_band_roformer.yaml)はパッケージに
 # 同梱されており別途取得不要。
 melband-roformer-infer==0.1.5
+
+# 歌詞のモーラ読み変換(§4.4.6 STEP6)。OpenJTalkのCython/C++バインディング。
+# ソース配布のみ(sdist)でmacOS arm64向けの事前ビルド済みwheelは無いため、
+# ビルド時にXcode Command Line Toolsのcコンパイラでその場コンパイルされる
+# (npm run build:python-runtime実行前に `sudo xcodebuild -license` でXcodeの
+# ライセンス同意が済んでいる必要がある。未同意だとcmakeの時点でコンパイラ
+# テストに失敗しビルドが止まる)。
+# 初回import(g2p呼び出し)時に辞書(open_jtalk_dic_utf_8, 約23MB)を
+# site-packages配下へ取得する副作用があるため、build-python-runtime.mjsの
+# 動作確認ステップで一度g2pを呼び、ビルド時点で辞書取得まで完了させている
+# (パッケージ後のアプリ実行時に改めてネットワークへ問い合わせることはない)。
+pyopenjtalk==0.4.1

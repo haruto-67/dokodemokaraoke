@@ -137,6 +137,9 @@ async function main() {
         'print(f"torch={torch.__version__} torchaudio={torchaudio.__version__} transformers={transformers.__version__} basic_pitch=OK mel_band_roformer={mel_band_roformer.__version__}")'
     ])
 
+    console.log('pyopenjtalkの辞書を取得中(初回importの副作用。以降はsite-packages内に永続化される)...')
+    run(pythonBin, ['-c', 'import pyopenjtalk; print(pyopenjtalk.g2p("辞書取得確認", kana=True))'])
+
     writeFileSync(STAMP_FILE, JSON.stringify(currentStamp(), null, 2))
 
     const sizeResult = spawnSync('du', ['-sh', RUNTIME_DIR], { encoding: 'utf-8' })
