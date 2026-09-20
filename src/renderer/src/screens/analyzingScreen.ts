@@ -63,6 +63,10 @@ export function mountAnalyzingScreen(container: HTMLElement, ctx: AppContext): S
   let unsubscribe: (() => void) | null = null
 
   const header = el('h1', { className: 'analyzing-title' }, ['解析しています…'])
+  const percentLabel = el('p', { className: 'analyzing-percent mono' }, ['0%'])
+  const overallBar = el('div', { className: 'analyzing-progress' })
+  const overallBarFill = el('div', { className: 'analyzing-progress-fill' })
+  overallBar.appendChild(overallBarFill)
   const stepList = el('div', { className: 'analyzing-steps' })
   const detailLabel = el('p', { className: 'analyzing-detail mono' }, [''])
   const cancelBtn = el('button', { className: 'btn btn-ghost' }, ['キャンセル'])
@@ -71,6 +75,8 @@ export function mountAnalyzingScreen(container: HTMLElement, ctx: AppContext): S
     el('div', { className: 'analyzing-body' }, [
       el('div', { className: 'analyzing-spinner' }),
       header,
+      percentLabel,
+      overallBar,
       stepList,
       detailLabel,
       cancelBtn
@@ -90,9 +96,30 @@ export function mountAnalyzingScreen(container: HTMLElement, ctx: AppContext): S
   }
   renderSteps()
 
+  // 解析全体(4ステップ)に占める進捗を概算で百分率化する(§5「解析中の操作性」、
+  // 曲の解析は5〜10分かかるため所要時間の見通しを示す)。各ステップは均等ウェイトとし、
+  // 完了/スキップ済みは1、実行中はサイドカーが送るprogress(0..1)、未着手は0として合算する。
+  function computeOverallPercent(): number {
+    let sum = 0
+    for (const id of STEP_ORDER) {
+      const s = stepStatus.get(id)
+      if (!s) continue
+      if (s.status === 'done' || s.status === 'skipped') sum += 1
+      else if (s.status === 'running') sum += Math.min(1, Math.max(0, s.progress))
+    }
+    return Math.round((sum / STEP_ORDER.length) * 100)
+  }
+
+  function renderOverallPercent(): void {
+    const pct = computeOverallPercent()
+    percentLabel.textContent = `${pct}%`
+    overallBarFill.style.width = `${pct}%`
+  }
+
   function handleProgress(progress: AnalysisStepProgress): void {
     stepStatus.set(progress.id, progress)
     renderSteps()
+    renderOverallPercent()
     detailLabel.textContent = progress.detail ?? ''
   }
 

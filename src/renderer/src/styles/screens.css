@@ -5,6 +5,10 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  -webkit-app-region: drag;
+}
+.analyzing-screen button {
+  -webkit-app-region: no-drag;
 }
 
 .analyzing-body {
@@ -35,6 +39,27 @@
   min-height: 16px;
   font-size: 12px;
   text-align: center;
+}
+
+.analyzing-percent {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--color-accent);
+}
+
+.analyzing-progress {
+  width: 280px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+.analyzing-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--color-accent), var(--color-accent-2));
+  transition: width 0.2s ease;
 }
 
 .analyzing-spinner {

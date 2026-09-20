@@ -66,6 +66,9 @@ nsis:
   perMachine: false
 dmg:
   sign: false
+  # 未指定だとexecutableName(ローマ字)がマウント時のボリューム名・ウィンドウタイトルに
+  # 使われてしまうため、productName(日本語)を明示する。
+  title: ${productName} ${version}
 # electron-builderはelectron fusesの書き込みをafterPack "の後"に行うため、
 # afterPackで署名するとfuses書き込み時にバイナリが変更され署名が壊れる(実機で確認済み)。
 # fuses書き込み後に確実に走るafterSignで署名する。

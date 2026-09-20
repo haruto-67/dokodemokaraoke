@@ -235,11 +235,16 @@ def align_tokens_to_audio(
         log_probs = torch.log_softmax(logits, dim=-1)
 
     targets = torch.tensor([target_ids], dtype=torch.int64)
-    # CTCのblank IDはmodel.config.pad_token_id(既定0)。元リポジトリのconfig.jsonも
-    # pad_token_id=0のため、これがfine-tuning時に実際に使われたblankと一致する
-    # (tokenizer_config.json上のpad_token="<pad>"(id 3002)はテキスト側のパディング用で別物、
-    # vocab.json上のid 0は"<unk>"表記だが、CTC上は数値としてのblankとして機能する)。
-    blank_id = model.config.pad_token_id if model.config.pad_token_id is not None else 0
+    # CTCのblank ID: 訂正(実機で発覚したバグ)。以前はmodel.config.pad_token_idを参照していたが、
+    # _load_wav2vec2_model()はvocab_sizeだけを指定してWav2Vec2Configを新規構築しているため、
+    # pad_token_idは元モデルの実値ではなく単なるHF既定値の0を返していただけだった。
+    # 実際には本文中のwav2vec2_vocab.json(3000エントリ、id 0="<unk>")は"い"等の普通の文字を
+    # 含む頻出IDであり、blank=0のままだとtargetsに0が含まれるケースが頻発し、
+    # torchaudioのforced_alignが`targets Tensor shouldn't contain blank index`で例外を投げていた。
+    # モデル本体の出力次元(vocab_size=3003)はvocab.jsonの3000エントリより3つ多く、
+    # 元トークナイザーが追加した特殊トークン(<s>/</s>/<pad>)の分だと考えられる。<pad>は
+    # 一般的な変換規約通り最後のクラスに割り当てられているとみなし、vocab_size-1をblankとする。
+    blank_id = model.config.vocab_size - 1
     alignment, scores = forced_align(log_probs, targets, blank=blank_id)
 
     frame_labels = alignment[0].tolist()

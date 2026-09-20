@@ -1,11 +1,19 @@
 """lyrics_align.pyの純粋ロジック部分のテスト。wav2vec2モデル自体(実チェックポイント)は
 使わず、katakana_to_hiragana / Wav2Vec2Vocab(実際に同梱するvocab.jsonを使用)だけを
-検証する(実モデルでのforced align検証は開発時に手動で実施済み)。
+検証する。ただしCTC blank ID回りは実際に本番で例外が発生したバグがあったため、
+AlignTokensToAudioBlankIdRegressionTestだけは実モデル(resources/models/)を使って検証する
+(モデル未取得の環境ではskipする)。
 """
 
 import unittest
+from pathlib import Path
 
-from lyrics_align import Wav2Vec2Vocab, katakana_to_hiragana, text_to_hiragana_reading
+import numpy as np
+
+from lyrics_align import Wav2Vec2Vocab, align_tokens_to_audio, katakana_to_hiragana, text_to_hiragana_reading
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_WAV2VEC2_MODEL_PATH = _REPO_ROOT / "resources" / "models" / "japanese-wav2vec2-base-rs35kh.safetensors"
 
 
 class KatakanaToHiraganaTest(unittest.TestCase):
@@ -66,6 +74,30 @@ class TextToHiraganaReadingTest(unittest.TestCase):
         # ルビ無しの「今日」はpyopenjtalkの推定に委ねられ、長音表記の「きょー」になる
         # (「｜今日《きょう》」のように明示ルビを与えれば「きょう」表記を強制できる)
         self.assertEqual(text_to_hiragana_reading("今日は晴れ"), "きょーわはれ")
+
+
+@unittest.skipUnless(_WAV2VEC2_MODEL_PATH.exists(), "wav2vec2モデル未取得のためskip(npm run build:modelsで取得)")
+class AlignTokensToAudioBlankIdRegressionTest(unittest.TestCase):
+    """実機で発生したバグの回帰テスト: CTCのblank IDをmodel.config.pad_token_id(常に0、
+    _load_wav2vec2_model()がvocab_sizeだけでConfigを再構築するため実値を反映しない)から
+    取っていたため、vocab.json上のid 0("<unk>"、通常の文字として頻出しうる)がtargetsに
+    含まれるたびにtorchaudio.functional.forced_alignが
+    `targets Tensor shouldn't contain blank index`で例外を投げていた。
+    blank_idをmodel.config.vocab_size-1に変更して解消したことを検証する。
+    """
+
+    def test_does_not_raise_when_target_contains_unk_token(self):
+        vocab = Wav2Vec2Vocab()
+        # "X"はvocabに無いため<unk>(id 0)にフォールバックする。これが本番で起きた状況の再現。
+        text = "きょうはXいいてんきですね"
+        target_ids = vocab.encode(text)
+        self.assertIn(0, target_ids, "このテスト自体がunk(id 0)を含む状況を再現できていない")
+
+        audio = (np.random.default_rng(0).standard_normal(16000 * 3) * 0.01).astype(np.float32)
+        tokens, confidence = align_tokens_to_audio(text, audio, _WAV2VEC2_MODEL_PATH, vocab=vocab)
+
+        self.assertGreater(len(tokens), 0)
+        self.assertGreaterEqual(confidence, 0.0)
 
 
 if __name__ == "__main__":

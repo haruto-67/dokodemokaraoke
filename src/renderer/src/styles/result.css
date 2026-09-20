@@ -8,6 +8,7 @@
   gap: 24px;
   padding: 48px 24px;
   overflow-y: auto;
+  -webkit-app-region: drag;
 }
 
 .result-title {
@@ -76,4 +77,5 @@
   gap: 10px;
   margin-top: auto;
   padding-top: 12px;
+  -webkit-app-region: no-drag;
 }
