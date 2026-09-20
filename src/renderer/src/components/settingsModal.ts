@@ -1,6 +1,7 @@
 import type { AppContext } from '../appContext'
 import { el } from '../lib/dom'
 import { notifyError } from '../lib/projectActions'
+import { listMicInputDevices, MicPermissionError, startMicPitchDetection, type MicPitchSession } from '../audio/micPitchInput'
 
 /**
  * 設定モーダル(§4.2, §3)。いずれの画面からも ⌘, で開ける。
@@ -82,6 +83,63 @@ export function mountSettingsModal(root: HTMLElement, ctx: AppContext): void {
   countInInput.addEventListener('change', () => void patchSettings({ countInEnabled: countInInput.checked }))
   countInRow.control.appendChild(countInInput)
 
+  // --- 採点用マイク入力デバイス・入力レベルメーター(§4.12.1) ---
+  const micRow = settingsRow('採点用マイク入力')
+  const micSelect = el('select', { className: 'editor-select' }) as HTMLSelectElement
+  const micMeterWrap = el('div', { className: 'settings-mic-meter' })
+  const micMeterFill = el('div', { className: 'settings-mic-meter-fill' })
+  micMeterWrap.appendChild(micMeterFill)
+  const micStatus = el('span', { className: 'mono settings-path' }, [''])
+  micRow.control.append(micSelect, micMeterWrap, micStatus)
+
+  let micSession: MicPitchSession | null = null
+
+  function stopMicPreview(): void {
+    micSession?.stop()
+    micSession = null
+    micMeterFill.style.width = '0%'
+  }
+
+  async function startMicPreview(): Promise<void> {
+    stopMicPreview()
+    const deviceId = ctx.settings.getState().micDeviceId
+    try {
+      micSession = await startMicPitchDetection(
+        (sample) => {
+          // RMS(だいたい0〜0.3程度が実用域)を0〜100%のバーに単純にスケールする。
+          const pct = Math.min(100, sample.rms * 300)
+          micMeterFill.style.width = `${pct}%`
+        },
+        { deviceId }
+      )
+      micStatus.textContent = ''
+      // ラベル取得のため権限確定後に再列挙する
+      await refreshMicDeviceList()
+    } catch (e) {
+      if (e instanceof MicPermissionError) {
+        micStatus.textContent = e.kind === 'permission_denied' ? 'マイクの使用が許可されていません' : e.message
+      } else {
+        micStatus.textContent = 'マイクの初期化に失敗しました'
+      }
+    }
+  }
+
+  async function refreshMicDeviceList(): Promise<void> {
+    const devices = await listMicInputDevices()
+    const current = ctx.settings.getState().micDeviceId
+    micSelect.replaceChildren(el('option', { value: '' }, ['既定のマイク']))
+    devices.forEach((d, i) => {
+      micSelect.appendChild(el('option', { value: d.deviceId }, [d.label || `マイク${i + 1}`]))
+    })
+    micSelect.value = current ?? ''
+  }
+  micSelect.addEventListener('change', () => {
+    void (async () => {
+      await patchSettings({ micDeviceId: micSelect.value || null })
+      await startMicPreview()
+    })()
+  })
+
   // --- yt-dlpの更新(§4.3実装メモ: 同梱版＋任意更新。YouTube側の仕様変更で壊れやすいため) ---
   const ytDlpRow = settingsRow('yt-dlp(YouTube取り込み)')
   const ytDlpStatus = el('span', { className: 'mono settings-path' }, [''])
@@ -110,6 +168,7 @@ export function mountSettingsModal(root: HTMLElement, ctx: AppContext): void {
     bigSeekRow.row,
     sourceRow.row,
     countInRow.row,
+    micRow.row,
     ytDlpRow.row
   )
 
@@ -137,7 +196,13 @@ export function mountSettingsModal(root: HTMLElement, ctx: AppContext): void {
   function syncVisibility(): void {
     const open = ctx.ui.getState().settingsOpen
     overlay.classList.toggle('visible', open)
-    if (open) syncFromSettings()
+    if (open) {
+      syncFromSettings()
+      void refreshMicDeviceList()
+      void startMicPreview()
+    } else {
+      stopMicPreview()
+    }
   }
 
   ctx.ui.subscribe(syncVisibility)

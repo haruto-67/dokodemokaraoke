@@ -71,3 +71,18 @@
   font-size: 11px;
   color: var(--color-text-weak);
 }
+
+.settings-mic-meter {
+  width: 60px;
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+
+.settings-mic-meter-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--color-accent);
+  transition: width 60ms linear;
+}

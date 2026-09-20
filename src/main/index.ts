@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain, session } from 'electron'
 import { createMainWindow } from './window'
 import { buildAppMenu } from './menu'
 import { registerIpcHandlers } from './ipcHandlers'
@@ -27,6 +27,13 @@ app.on('open-file', (event, filePath) => {
 
 app.whenReady().then(() => {
   app.setName('どこでもカラオケセット')
+
+  // 採点用マイク入力(§4.12.1)。Electronは既定で全ての権限要求を自動承認するとは限らないため、
+  // getUserMedia('media')だけ明示的に許可する(マイク以外の権限は要求してくる想定がないため対象外)。
+  // macOSのTCCマイク権限自体(システムダイアログ)はこれとは別にOSが表示する。
+  session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+    callback(permission === 'media')
+  })
 
   registerIpcHandlers(getWindow)
   registerAnalysisHandlers(getWindow)

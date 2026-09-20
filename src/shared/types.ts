@@ -125,6 +125,8 @@ export interface AppSettings {
   bigSeekStepSec: number
   defaultPerformSource: 'playback' | 'analysis'
   countInEnabled: boolean
+  /** 採点用マイク入力デバイス(§4.12.1)。nullはブラウザ既定デバイスを使う */
+  micDeviceId: string | null
 }
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -135,7 +137,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   seekStepSec: 0.5,
   bigSeekStepSec: 5,
   defaultPerformSource: 'playback',
-  countInEnabled: true
+  countInEnabled: true,
+  micDeviceId: null
 }
 
 // ホーム画面カード用の軽量メタデータ
