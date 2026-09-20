@@ -32,8 +32,14 @@ RMVPE_FPS = 100.0
 
 
 def send(message: dict) -> None:
-    sys.stdout.write(json.dumps(message, ensure_ascii=False) + "\n")
-    sys.stdout.flush()
+    # sys.stdout(現在の値)ではなくsys.__stdout__(インタプリタ起動時の本来の標準出力)に
+    # 書く。separation.pyがdemix_trackの生テキスト出力を横取りするためcontextlib.
+    # redirect_stdout()で一時的にsys.stdoutを差し替えており、その最中にon_progress
+    # コールバック経由でこのsend()が呼ばれると、JSON-RPCメッセージ自体が横取り用
+    # ストリームに飲み込まれてElectron側に一切届かなくなる不具合が実機で発生していた
+    # (解析の進捗が0%のまま動かなく見える原因)。sys.__stdout__は再代入の影響を受けない。
+    sys.__stdout__.write(json.dumps(message, ensure_ascii=False) + "\n")
+    sys.__stdout__.flush()
 
 
 def _send_progress(req_id: str, step_id: str, label: str, progress: float, status: str, detail: str | None = None) -> None:
@@ -146,7 +152,16 @@ def handle_analyze(req: dict) -> None:
             # 一致しないため使わず、行全体のstart/end/信頼度だけを結果に含める
             # (行内のトークンタイミングは既存のallocateTokenTimings(§4.6.3)に委ねる方針。
             # 詳細は[[どこカラv3の技術選定]]参照)。
-            _tokens, confidence = align_tokens_to_audio(reading, segment_audio, wav2vec2_path, vocab=vocab)
+            # 1行ごとにtry/exceptで囲む: VAD検出区間が短すぎる/歌詞行が長すぎる等の
+            # ミスマッチが原因でこの行だけ整合しないケースがあり得るが、そのために
+            # それまでの分離・F0・ノート化・フレーズ検出の結果(数分〜十数分かけた処理)を
+            # 丸ごと捨てるのは避け、その行だけconfidence=Noneとして続行する(実機で発覚)。
+            try:
+                _tokens, confidence = align_tokens_to_audio(reading, segment_audio, wav2vec2_path, vocab=vocab)
+            except Exception:  # noqa: BLE001 -- この行だけ諦めて続行する
+                # AnalyzeSidecarLine.confidenceはwireプロトコル上number(非nullable)のため、
+                # align_tokens_to_audioの既存の「アライメント不能」規約(0.0)に合わせる。
+                confidence = 0.0
 
             aligned_lines.append(
                 {
@@ -157,7 +172,7 @@ def handle_analyze(req: dict) -> None:
                 }
             )
             _send_progress(req_id, "assign", align_label, (i + 1) / pair_count if pair_count else 1.0, "running")
-    except Exception as exc:  # noqa: BLE001 -- 同上
+    except Exception as exc:  # noqa: BLE001 -- ここに来るのは行単位以外(vocab読み込み失敗等)の異常
         send({"type": "error", "id": req_id, "message": f"歌詞のタイミング付けに失敗しました: {exc}"})
         return
     _send_progress(req_id, "assign", align_label, 1.0, "done")

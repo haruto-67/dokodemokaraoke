@@ -234,6 +234,17 @@ def align_tokens_to_audio(
         logits = model(torch.from_numpy(audio).unsqueeze(0)).logits
         log_probs = torch.log_softmax(logits, dim=-1)
 
+    # CTCは連続する同一ラベルの間に必ずblankフレームを1つ挟む必要があるため、
+    # 最低でも「targets長 + 直前と同じラベルが連続する箇所の数」フレームが要る。
+    # VAD検出区間(§4.4.5)が短すぎる/歌詞行が長すぎる場合にここを満たせないことがあり、
+    # 満たせないままforced_alignを呼ぶと`targets length is too long for CTC`で例外になる
+    # (実機で発生を確認)。1行分のミスマッチで解析全体を失敗させないよう、ここで検知して
+    # 空の結果(信頼度0)を返す(呼び出し側main.pyでこの行だけconfidence=Noneとして扱う想定)。
+    num_repeats = sum(1 for i in range(1, len(target_ids)) if target_ids[i] == target_ids[i - 1])
+    min_required_frames = len(target_ids) + num_repeats
+    if log_probs.shape[1] < min_required_frames:
+        return [], 0.0
+
     targets = torch.tensor([target_ids], dtype=torch.int64)
     # CTCのblank ID: 訂正(実機で発覚したバグ)。以前はmodel.config.pad_token_idを参照していたが、
     # _load_wav2vec2_model()はvocab_sizeだけを指定してWav2Vec2Configを新規構築しているため、

@@ -100,5 +100,31 @@ class AlignTokensToAudioBlankIdRegressionTest(unittest.TestCase):
         self.assertGreaterEqual(confidence, 0.0)
 
 
+@unittest.skipUnless(_WAV2VEC2_MODEL_PATH.exists(), "wav2vec2モデル未取得のためskip(npm run build:modelsで取得)")
+class AlignTokensToAudioCtcTooLongRegressionTest(unittest.TestCase):
+    """実機で発生したバグの回帰テスト: VAD検出区間(音声)が短すぎるのに対応する歌詞行が
+    長い場合、CTCの制約(targets長 + 連続重複ラベル数 <= フレーム数)を満たせず
+    torchaudio.functional.forced_alignが`targets length is too long for CTC`で例外を投げ、
+    main.py側でこれをそのままエラー扱いにしていたため、この1行のミスマッチだけで解析全体
+    (分離・F0・ノート化等、それまでの数分〜十数分の処理結果)が失われていた。
+    align_tokens_to_audio側でCTCの最小フレーム数を満たせるか事前チェックし、
+    満たせない場合は例外を投げず空の結果を返すことを検証する。
+    """
+
+    def test_returns_empty_result_instead_of_raising_when_audio_too_short_for_text(self):
+        vocab = Wav2Vec2Vocab()
+        # 十分に長い歌詞行(64文字相当を狙う)に対し、極端に短い音声(0.3秒)を渡す。
+        long_text = "きょうはとてもいいてんきですね" * 4
+        target_ids = vocab.encode(long_text)
+        self.assertGreater(len(target_ids), 30, "このテスト自体が十分に長いtargetsを再現できていない")
+
+        short_audio = (np.random.default_rng(1).standard_normal(int(16000 * 0.3)) * 0.01).astype(np.float32)
+
+        tokens, confidence = align_tokens_to_audio(long_text, short_audio, _WAV2VEC2_MODEL_PATH, vocab=vocab)
+
+        self.assertEqual(tokens, [])
+        self.assertEqual(confidence, 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()
