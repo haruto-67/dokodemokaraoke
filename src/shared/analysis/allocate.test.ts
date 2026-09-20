@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { allocateTokenTimings } from './allocate'
+import { allocateTokenTimings, findPitchChangePoints, type PitchFrame } from './allocate'
 import type { Token } from '../tokenize'
 
 function tok(text: string, ruby: string | null = null): Token {
@@ -68,5 +68,36 @@ describe('allocateTokenTimings', () => {
   it('単一トークンは行全体を占める', () => {
     const result = allocateTokenTimings([tok('あ')], 2, 5)
     expect(result).toEqual([{ text: 'あ', ruby: null, start: 2, end: 5 }])
+  })
+})
+
+describe('findPitchChangePoints', () => {
+  it('半音換算で閾値以上跳躍したフレームの時刻を返す', () => {
+    // 220Hz -> 440Hz は1オクターブ(12半音)の跳躍
+    const frames: PitchFrame[] = [
+      { timeSec: 0, hz: 220, voiced: true },
+      { timeSec: 0.1, hz: 220, voiced: true },
+      { timeSec: 0.2, hz: 440, voiced: true },
+      { timeSec: 0.3, hz: 440, voiced: true }
+    ]
+    expect(findPitchChangePoints(frames)).toEqual([0.2])
+  })
+
+  it('閾値未満のなだらかな変化は検出しない', () => {
+    const frames: PitchFrame[] = [
+      { timeSec: 0, hz: 220, voiced: true },
+      { timeSec: 0.1, hz: 221, voiced: true },
+      { timeSec: 0.2, hz: 222, voiced: true }
+    ]
+    expect(findPitchChangePoints(frames)).toEqual([])
+  })
+
+  it('無声フレームをまたぐ場合は変化点として扱わない', () => {
+    const frames: PitchFrame[] = [
+      { timeSec: 0, hz: 220, voiced: true },
+      { timeSec: 0.1, hz: 0, voiced: false },
+      { timeSec: 0.2, hz: 440, voiced: true }
+    ]
+    expect(findPitchChangePoints(frames)).toEqual([])
   })
 })

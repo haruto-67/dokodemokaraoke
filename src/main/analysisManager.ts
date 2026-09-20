@@ -11,6 +11,7 @@ import {
   type AnalysisStartParams,
   type AnalysisStartResult
 } from '../shared/ipc'
+import type { AnalyzeSidecarResult } from '../shared/pythonSidecarProtocol'
 import { PythonSidecar } from './pythonSidecar'
 import { getModelsDir, getPythonExecutablePath, getPythonSidecarScriptPath } from './pythonRuntime'
 
@@ -59,7 +60,7 @@ export function registerAnalysisHandlers(getWindow: () => BrowserWindow | null):
     sidecar
       .request({ id: jobId, method: 'analyze', params: { ...params, workDir } })
       .then((result) => {
-        const event: AnalysisDoneEvent = { jobId, result }
+        const event: AnalysisDoneEvent = { jobId, result: result as AnalyzeSidecarResult }
         getWindow()?.webContents.send(IPC.onAnalysisDone, event)
       })
       .catch((error: Error) => {

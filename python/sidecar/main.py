@@ -142,10 +142,11 @@ def handle_analyze(req: dict) -> None:
             segment_audio = vocals_audio[start_sample:end_sample].astype("float32")
 
             reading = text_to_hiragana_reading(line_text)
-            tokens, confidence = align_tokens_to_audio(reading, segment_audio, wav2vec2_path, vocab=vocab)
-            for token in tokens:
-                token["start"] += segment["start"]
-                token["end"] += segment["start"]
+            # 文字単位のtokensはUI側のトークン粒度(§4.6.1、ルビ単位+モーラ単位の混在)と
+            # 一致しないため使わず、行全体のstart/end/信頼度だけを結果に含める
+            # (行内のトークンタイミングは既存のallocateTokenTimings(§4.6.3)に委ねる方針。
+            # 詳細は[[どこカラv3の技術選定]]参照)。
+            _tokens, confidence = align_tokens_to_audio(reading, segment_audio, wav2vec2_path, vocab=vocab)
 
             aligned_lines.append(
                 {
@@ -153,7 +154,6 @@ def handle_analyze(req: dict) -> None:
                     "start": segment["start"],
                     "end": segment["end"],
                     "confidence": confidence,
-                    "tokens": tokens,
                 }
             )
             _send_progress(req_id, "assign", align_label, (i + 1) / pair_count if pair_count else 1.0, "running")

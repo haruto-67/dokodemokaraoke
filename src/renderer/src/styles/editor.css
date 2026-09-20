@@ -248,3 +248,9 @@
   font-size: 12px;
   color: var(--color-text-weak);
 }
+
+.editor-line-confidence-row {
+  font-size: 12px;
+  color: var(--color-text-weak);
+  margin-top: 2px;
+}

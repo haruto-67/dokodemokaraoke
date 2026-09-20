@@ -14,11 +14,21 @@ export interface DokokaraLine {
   start: number
   end: number
   tokens: DokokaraToken[]
+  /** 自動タイミング付け(§4.4.7)の信頼度(0..1)。手動追加・分割・結合した行や、
+   *  検出フレーズ数不足で自動アライメントされなかった行はnull。 */
+  confidence: number | null
 }
 
 export interface DokokaraPhrase {
   start: number
   end: number
+}
+
+export interface DokokaraNote {
+  start: number
+  end: number
+  pitchMidi: number
+  amplitude: number
 }
 
 export interface DokokaraAudioTrack {
@@ -28,19 +38,29 @@ export interface DokokaraAudioTrack {
   sampleRate: number
 }
 
-export type VocalIsolationMethod = 'difference' | 'none'
+export type SeparationMethod = 'melband-roformer'
+export type PitchMethod = 'rmvpe'
+export type AlignMethod = 'wav2vec2-ctc'
+
+/**
+ * F0(基本周波数)曲線1フレームあたりの秒数。Basic Pitchのpost-processing座標系
+ * (ANNOTATIONS_FPS=86、python/sidecar/f0_notes.py参照)に合わせて固定。
+ */
+export const DEFAULT_HOP_SEC = 1 / 86
 
 export interface DokokaraProject {
-  version: 2
+  version: 3
   app: 'dokokara'
   name: string
   createdAt: string
   updatedAt: string
 
   audio: {
+    // v3ではボーカル/伴奏分離(STEP2)の出力を格納する: analysis=分離済みボーカル、
+    // playback=分離済み伴奏。両者は同一音源由来のため、旧v2にあった
+    // alignmentOffsetSamples(独立収録した2トラックの時間合わせ)は不要。
     analysis: DokokaraAudioTrack | null
     playback: DokokaraAudioTrack | null
-    alignmentOffsetSamples: number
   }
 
   playback: {
@@ -49,12 +69,13 @@ export interface DokokaraProject {
   }
 
   analysis: {
-    method: 'yin'
-    vocalIsolation: VocalIsolationMethod
+    separation: SeparationMethod
+    pitchMethod: PitchMethod
+    alignMethod: AlignMethod
     hopSec: number
     frameCount: number
-    pitchFile: string
-    onsetFile: string
+    f0File: string
+    notes: DokokaraNote[]
     phrases: DokokaraPhrase[]
   }
 
@@ -67,27 +88,27 @@ export interface DokokaraProject {
 export function createEmptyProject(name: string): DokokaraProject {
   const now = new Date().toISOString()
   return {
-    version: 2,
+    version: 3,
     app: 'dokokara',
     name,
     createdAt: now,
     updatedAt: now,
     audio: {
       analysis: null,
-      playback: null,
-      alignmentOffsetSamples: 0
+      playback: null
     },
     playback: {
       offsetMs: 0,
       defaultSource: 'playback'
     },
     analysis: {
-      method: 'yin',
-      vocalIsolation: 'none',
-      hopSec: 0.005,
+      separation: 'melband-roformer',
+      pitchMethod: 'rmvpe',
+      alignMethod: 'wav2vec2-ctc',
+      hopSec: DEFAULT_HOP_SEC,
       frameCount: 0,
-      pitchFile: 'pitch.bin',
-      onsetFile: 'onsets.bin',
+      f0File: 'f0.bin',
+      notes: [],
       phrases: []
     },
     lyrics: []
@@ -128,16 +149,8 @@ export interface ProjectSummary {
   waveformThumb: number[] | null
 }
 
-// 解析パイプラインの進捗
-export type AnalysisStepId =
-  | 'alignment'
-  | 'vocalIsolation'
-  | 'preprocess'
-  | 'pitch'
-  | 'onset'
-  | 'phrase'
-  | 'assign'
-  | 'tokenAllocate'
+// 解析パイプラインの進捗(python/sidecar/main.pyが送るstep idと一致させる)
+export type AnalysisStepId = 'vocalIsolation' | 'pitch' | 'phrase' | 'assign'
 
 export interface AnalysisStepProgress {
   id: AnalysisStepId
@@ -145,23 +158,6 @@ export interface AnalysisStepProgress {
   progress: number // 0..1
   status: 'pending' | 'running' | 'done' | 'skipped' | 'error'
   detail?: string
-}
-
-export interface AnalysisResult {
-  alignmentOffsetSamples: number
-  vocalIsolationUsed: VocalIsolationMethod
-  pitchHz: Float32Array
-  hopSec: number
-  onsetsSec: Float32Array
-  phrases: DokokaraPhrase[]
-  logs: AnalysisLogEntry[]
-}
-
-export interface AnalysisLogEntry {
-  step: AnalysisStepId
-  label: string
-  durationMs: number
-  detail: string
 }
 
 // ログ（§5 ログ要件）

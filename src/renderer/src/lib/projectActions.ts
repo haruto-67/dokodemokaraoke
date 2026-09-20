@@ -62,10 +62,9 @@ async function applyOpenResult(
     }
   }
 
-  const pitchHz = result.pitchBin ? new Float32Array(result.pitchBin) : null
-  const onsetsSec = result.onsetsBin ? new Float32Array(result.onsetsBin) : null
+  const pitchHz = result.f0Bin ? new Float32Array(result.f0Bin) : null
 
-  ctx.editor.loadProject(editorFilePath, json, pitchHz, onsetsSec, audioState)
+  ctx.editor.loadProject(editorFilePath, json, pitchHz, audioState)
   ctx.playback.setBuffer(
     json.playback.defaultSource === 'analysis' ? audioState.analysisBuffer : audioState.playbackBuffer ?? audioState.analysisBuffer
   )
@@ -132,8 +131,7 @@ export async function saveProject(ctx: AppContext, saveAs: boolean): Promise<boo
   const payload = {
     filePath: saveAs ? null : state.filePath,
     json,
-    pitchBin: state.pitchHz ? typedArrayToArrayBuffer(state.pitchHz) : null,
-    onsetsBin: state.onsetsSec ? typedArrayToArrayBuffer(state.onsetsSec) : null,
+    f0Bin: state.pitchHz ? typedArrayToArrayBuffer(state.pitchHz) : null,
     audio: {
       analysis:
         state.audio.analysisSourcePath && state.audio.analysisExt
@@ -171,8 +169,7 @@ export async function backupProject(ctx: AppContext): Promise<void> {
   const payload = {
     filePath: state.filePath,
     json,
-    pitchBin: state.pitchHz ? typedArrayToArrayBuffer(state.pitchHz) : null,
-    onsetsBin: state.onsetsSec ? typedArrayToArrayBuffer(state.onsetsSec) : null,
+    f0Bin: state.pitchHz ? typedArrayToArrayBuffer(state.pitchHz) : null,
     audio: {
       analysis:
         state.audio.analysisSourcePath && state.audio.analysisExt

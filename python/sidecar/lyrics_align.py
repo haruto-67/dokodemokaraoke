@@ -217,7 +217,7 @@ def align_tokens_to_audio(
 ) -> Tuple[List[AlignedToken], float]:
     """ひらがな読みのテキストを、指定区間の16kHzモノラル音声にforced alignする。
 
-    戻り値: (アライメント済みトークン(1文字ずつ,区間内相対秒), 平均対数尤度スコア)
+    戻り値: (アライメント済みトークン(1文字ずつ,区間内相対秒), 信頼度(0..1、平均対数尤度をexpで戻した値))
     """
     from torchaudio.functional import forced_align
 
@@ -270,5 +270,7 @@ def align_tokens_to_audio(
         current_scores.append(frame_scores[frame_idx])
     flush(len(frame_labels))
 
-    avg_score = float(np.mean(frame_scores)) if frame_scores else 0.0
-    return tokens, avg_score
+    # forced_alignのscoresはフレームごとの対数尤度(負値、0が最良)。編集画面にそのまま
+    # 出しても直感的でないため、平均対数尤度をexpで0..1の値(幾何平均的な確率)へ戻す。
+    avg_confidence = float(np.exp(np.mean(frame_scores))) if frame_scores else 0.0
+    return tokens, avg_confidence

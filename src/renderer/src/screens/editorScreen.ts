@@ -6,9 +6,8 @@ import { snapTime, nearestGridTime, SNAP_PRIORITY, type SnapTarget } from '../li
 import { rescaleTokensExcludingLocked, reallocateRespectingLocks } from '../lib/retiming'
 import { buildWaveformPeaks } from '../lib/waveform'
 import { tokenizeLine } from '@shared/tokenize'
-import { allocateTokenTimings } from '@shared/analysis/allocate'
-import { findPitchChangePoints } from '@shared/analysis/pitch'
-import type { DokokaraLine, DokokaraToken } from '@shared/types'
+import { allocateTokenTimings, findPitchChangePoints } from '@shared/analysis/allocate'
+import { DEFAULT_HOP_SEC, type DokokaraLine, type DokokaraToken } from '@shared/types'
 
 const BASE_PPS = 80 // 1倍ズームでの1秒あたりピクセル数
 const MIN_ZOOM = 0.25
@@ -93,7 +92,8 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
   const sidePanelEmpty = el('p', { className: 'editor-side-empty' }, ['行を選択するとここで編集できます'])
   const textArea = el('textarea', { className: 'editor-text-input', rows: 3 }) as HTMLTextAreaElement
   const lineTimeRow = el('div', { className: 'editor-line-time-row mono' })
-  sidePanel.append(sidePanelEmpty, textArea, lineTimeRow)
+  const lineConfidenceRow = el('div', { className: 'editor-line-confidence-row mono' })
+  sidePanel.append(sidePanelEmpty, textArea, lineTimeRow, lineConfidenceRow)
   textArea.style.display = 'none'
 
   root.append(header, toolbar, el('div', { className: 'editor-main' }, [scrollArea, sidePanel]))
@@ -177,10 +177,9 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
           svg.appendChild(line)
         }
       }
-      const onsets = s.onsetsSec ?? new Float32Array(0)
-      for (let i = 0; i < onsets.length; i++) {
+      for (const onset of onsetsFromState()) {
         const line = document.createElementNS(ns, 'line')
-        const x = xForTime(onsets[i])
+        const x = xForTime(onset)
         line.setAttribute('x1', String(x))
         line.setAttribute('x2', String(x))
         line.setAttribute('y1', '0')
@@ -194,7 +193,7 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
 
     // ピッチリボン(二層描画: 太いグロー + 細い明色線)
     const pitchHz = s.pitchHz
-    const hopSec = s.project?.analysis.hopSec ?? 0.005
+    const hopSec = s.project?.analysis.hopSec ?? DEFAULT_HOP_SEC
     if (pitchHz && pitchHz.length > 0) {
       const step = Math.max(1, Math.floor(1 / Math.max(1, pps() * hopSec)))
       const points: [number, number][] = []
@@ -356,8 +355,7 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
       targets.push({ time: p.start, priority: SNAP_PRIORITY.phraseBoundary })
       targets.push({ time: p.end, priority: SNAP_PRIORITY.phraseBoundary })
     }
-    const onsets = s.onsetsSec ?? new Float32Array(0)
-    for (let i = 0; i < onsets.length; i++) targets.push({ time: onsets[i], priority: SNAP_PRIORITY.onset })
+    for (const onset of onsetsFromState()) targets.push({ time: onset, priority: SNAP_PRIORITY.onset })
     return targets
   }
 
@@ -430,8 +428,7 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
         staticTargets.push({ time: p.start, priority: SNAP_PRIORITY.phraseBoundary })
         staticTargets.push({ time: p.end, priority: SNAP_PRIORITY.phraseBoundary })
       }
-      const onsets = s.onsetsSec ?? new Float32Array(0)
-      for (let i = 0; i < onsets.length; i++) staticTargets.push({ time: onsets[i], priority: SNAP_PRIORITY.onset })
+      for (const onset of onsetsFromState()) staticTargets.push({ time: onset, priority: SNAP_PRIORITY.onset })
 
       const onMove = (ev: PointerEvent): void => {
         const deltaSec = (ev.clientX - startClientX) / pps()
@@ -575,12 +572,15 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
       sidePanelEmpty.style.display = 'block'
       textArea.style.display = 'none'
       lineTimeRow.textContent = ''
+      lineConfidenceRow.textContent = ''
       return
     }
     sidePanelEmpty.style.display = 'none'
     textArea.style.display = 'block'
     if (document.activeElement !== textArea) textArea.value = line.text
     lineTimeRow.textContent = `${formatTime(line.start)} 〜 ${formatTime(line.end)}`
+    lineConfidenceRow.textContent =
+      line.confidence == null ? '自動タイミング付け: 未検出(手動)' : `自動タイミング付けの信頼度: ${Math.round(line.confidence * 100)}%`
   }
 
   textArea.addEventListener('input', () => {
@@ -596,13 +596,18 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
     const line = (s.project?.lyrics ?? []).find((l) => l.id === lineId)
     if (!line) return
     const tokens = tokenizeLine(newText)
-    const onsetsSec = Array.from(s.onsetsSec ?? [])
+    const onsetsSec = onsetsFromState()
     const pitchChangePoints = computePitchChangePoints()
     const timed = allocateTokenTimings(tokens, line.start, line.end, { onsetsSec, pitchChangePoints })
     ctx.editor.applyAndCommit((lyrics) =>
       lyrics.map((l) =>
         l.id === lineId
-          ? { ...l, text: newText, tokens: timed.map((t) => ({ text: t.text, ruby: t.ruby, start: t.start, end: t.end, locked: false })) }
+          ? {
+              ...l,
+              text: newText,
+              tokens: timed.map((t) => ({ text: t.text, ruby: t.ruby, start: t.start, end: t.end, locked: false })),
+              confidence: null
+            }
           : l
       )
     )
@@ -610,10 +615,16 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
     renderBoundary()
   }
 
+  /** STEP4で検出したノートの開始時刻を、トークン境界のスナップ候補として使う(§4.6.3手順2)。 */
+  function onsetsFromState(): number[] {
+    const s = state()
+    return (s.project?.analysis.notes ?? []).map((n) => n.start)
+  }
+
   function computePitchChangePoints(): number[] {
     const s = state()
     if (!s.pitchHz) return []
-    const hopSec = s.project?.analysis.hopSec ?? 0.005
+    const hopSec = s.project?.analysis.hopSec ?? DEFAULT_HOP_SEC
     const frames = Array.from(s.pitchHz).map((hz, i) => ({ timeSec: i * hopSec, hz, voiced: hz > 0 }))
     return findPitchChangePoints(frames)
   }
@@ -622,10 +633,12 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
     const s = state()
     const line = (s.project?.lyrics ?? []).find((l) => l.id === s.selection.lineId)
     if (!line) return
-    const onsetsSec = Array.from(s.onsetsSec ?? [])
+    const onsetsSec = onsetsFromState()
     const pitchChangePoints = computePitchChangePoints()
     const newTokens = reallocateRespectingLocks(line.tokens, line.start, line.end, onsetsSec, pitchChangePoints)
-    ctx.editor.applyAndCommit((lyrics) => lyrics.map((l) => (l.id === line.id ? { ...l, tokens: newTokens } : l)))
+    ctx.editor.applyAndCommit((lyrics) =>
+      lyrics.map((l) => (l.id === line.id ? { ...l, tokens: newTokens, confidence: null } : l))
+    )
     renderBoundary()
   })
 
@@ -636,7 +649,8 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
       text: '新しい行',
       start: playheadT,
       end: playheadT + 1,
-      tokens: [{ text: '新しい行', ruby: null, start: playheadT, end: playheadT + 1, locked: false }]
+      tokens: [{ text: '新しい行', ruby: null, start: playheadT, end: playheadT + 1, locked: false }],
+      confidence: null
     }
     ctx.editor.applyAndCommit((lyrics) => [...lyrics, newLine].sort((a, b) => a.start - b.start))
     selectLine(newLine.id)
@@ -664,7 +678,8 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
       text: `${cur.text}${next.text}`,
       start: cur.start,
       end: next.end,
-      tokens: [...cur.tokens, ...next.tokens]
+      tokens: [...cur.tokens, ...next.tokens],
+      confidence: null
     }
     ctx.editor.applyAndCommit((lyrics) => {
       const copy = lyrics.slice()
@@ -696,14 +711,16 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
       text: leftTokens.map((tk) => tk.text).join(''),
       start: line.start,
       end: leftTokens[leftTokens.length - 1].end,
-      tokens: leftTokens
+      tokens: leftTokens,
+      confidence: line.confidence
     }
     const rightLine: DokokaraLine = {
       id: generateLineId(),
       text: rightTokens.map((tk) => tk.text).join(''),
       start: rightTokens[0].start,
       end: line.end,
-      tokens: rightTokens
+      tokens: rightTokens,
+      confidence: line.confidence
     }
     ctx.editor.applyAndCommit((lyrics) => {
       const copy = lyrics.slice()

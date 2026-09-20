@@ -7,8 +7,7 @@ export interface LoadedProjectFile {
   json: DokokaraProject
   analysisAudio: { path: string; data: Buffer } | null
   playbackAudio: { path: string; data: Buffer } | null
-  pitchBin: Buffer | null
-  onsetsBin: Buffer | null
+  f0Bin: Buffer | null
   brokenParts: string[]
 }
 
@@ -33,20 +32,12 @@ export async function loadDokokaraFile(filePath: string): Promise<LoadedProjectF
     throw new Error('project.json を読み込めませんでした。プロジェクトファイルが破損している可能性があります。')
   }
 
-  let pitchBin: Buffer | null = null
+  let f0Bin: Buffer | null = null
   try {
-    const f = zip.file('pitch.bin')
-    if (f) pitchBin = await f.async('nodebuffer')
+    const f = zip.file('f0.bin')
+    if (f) f0Bin = await f.async('nodebuffer')
   } catch {
-    brokenParts.push('pitch.bin')
-  }
-
-  let onsetsBin: Buffer | null = null
-  try {
-    const f = zip.file('onsets.bin')
-    if (f) onsetsBin = await f.async('nodebuffer')
-  } catch {
-    brokenParts.push('onsets.bin')
+    brokenParts.push('f0.bin')
   }
 
   let analysisAudio: { path: string; data: Buffer } | null = null
@@ -71,13 +62,12 @@ export async function loadDokokaraFile(filePath: string): Promise<LoadedProjectF
     }
   }
 
-  return { json, analysisAudio, playbackAudio, pitchBin, onsetsBin, brokenParts }
+  return { json, analysisAudio, playbackAudio, f0Bin, brokenParts }
 }
 
 export interface SaveDokokaraInput {
   json: DokokaraProject
-  pitchBin: Buffer | null
-  onsetsBin: Buffer | null
+  f0Bin: Buffer | null
   analysisAudio: { path: string; data: Buffer } | null
   playbackAudio: { path: string; data: Buffer } | null
 }
@@ -89,8 +79,7 @@ export interface SaveDokokaraInput {
 export async function saveDokokaraFile(filePath: string, input: SaveDokokaraInput): Promise<void> {
   const zip = new JSZip()
   zip.file('project.json', JSON.stringify(input.json, null, 2))
-  if (input.pitchBin) zip.file('pitch.bin', input.pitchBin, { compression: 'DEFLATE' })
-  if (input.onsetsBin) zip.file('onsets.bin', input.onsetsBin, { compression: 'DEFLATE' })
+  if (input.f0Bin) zip.file('f0.bin', input.f0Bin, { compression: 'DEFLATE' })
   if (input.analysisAudio) {
     zip.file(input.analysisAudio.path, input.analysisAudio.data, { compression: 'STORE' })
   }

@@ -1,4 +1,4 @@
-import type { AnalysisStepProgress } from './types'
+import type { AnalysisStepProgress, DokokaraNote, DokokaraPhrase } from './types'
 
 /**
  * メインプロセス ⇔ Pythonサイドカー間の通信プロトコル(§8.2)。
@@ -21,13 +21,28 @@ export type SidecarRequest =
   | { id: string; method: 'analyze'; params: AnalyzeParams }
   | { id: string; method: 'cancel'; params: { targetId: string } }
 
-/**
- * サイドカー → メイン(stdout)。
- * `analysisWorkerProtocol.ts` の progress/done/error という形をそのまま踏襲する。
- * `result` の詳細な型は、解析パイプライン各STEPの実装が固まってから定義する
- * (現段階では通信の枠組みだけを確定させる)。
- */
+/** `analyze`成功時にサイドカーが返す解析結果(python/sidecar/main.pyの`result`と対応)。 */
+export interface AnalyzeSidecarLine {
+  text: string
+  start: number
+  end: number
+  /** forced alignの平均対数尤度スコア。フレーズ区間数不足で対応するVAD区間が無かった行は含まれない */
+  confidence: number
+}
+
+export interface AnalyzeSidecarResult {
+  vocalsPath: string
+  instrumentalPath: string
+  f0Path: string
+  notes: DokokaraNote[]
+  phraseSegments: DokokaraPhrase[]
+  /** 歌詞行の出現順に、対応するVAD区間があった行だけを含む(要件定義書v3 §4.4.7の単純化方針)。
+   *  歌詞行数がVAD区間数より多い場合、末尾の行はここに含まれない(呼び出し側でフォールバック処理する)。 */
+  lyrics: AnalyzeSidecarLine[]
+}
+
+/** サイドカー → メイン(stdout) */
 export type SidecarMessage =
   | { type: 'progress'; id: string; progress: AnalysisStepProgress }
-  | { type: 'done'; id: string; result: unknown }
+  | { type: 'done'; id: string; result: AnalyzeSidecarResult }
   | { type: 'error'; id: string; message: string }

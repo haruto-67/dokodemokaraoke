@@ -15,7 +15,6 @@ export interface EditorState {
   filePath: string | null
   project: DokokaraProject | null
   pitchHz: Float32Array | null
-  onsetsSec: Float32Array | null
   audio: EditorAudioState
   selection: {
     lineId: string | null
@@ -47,7 +46,6 @@ export function createEditorStore() {
     filePath: null,
     project: null,
     pitchHz: null,
-    onsetsSec: null,
     audio: emptyAudioState(),
     selection: { lineId: null, tokenIndex: null },
     zoom: 1,
@@ -67,14 +65,12 @@ export function createEditorStore() {
     filePath: string | null,
     project: DokokaraProject,
     pitchHz: Float32Array | null,
-    onsetsSec: Float32Array | null,
     audio: EditorAudioState
   ): void {
     store.setState({
       filePath,
       project,
       pitchHz,
-      onsetsSec,
       audio,
       selection: { lineId: null, tokenIndex: null },
       zoom: 1,

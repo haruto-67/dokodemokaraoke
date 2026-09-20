@@ -1,39 +1,49 @@
 import type { AppContext } from '../appContext'
 import type { ScreenHandle } from '../lib/screen'
 import { el, clear } from '../lib/dom'
-import { extractChannelData } from '../lib/audio'
+import { decodeAudio } from '../lib/audio'
 import { parseLyricsLines } from '../lib/lyrics'
 import { notifyError } from '../lib/projectActions'
-import { createEmptyProject, type AnalysisStepId, type AnalysisStepProgress, type DokokaraProject } from '@shared/types'
+import { tokenizeLine } from '@shared/tokenize'
+import { allocateTokenTimings, findPitchChangePoints } from '@shared/analysis/allocate'
+import {
+  createEmptyProject,
+  DEFAULT_HOP_SEC,
+  type AnalysisStepId,
+  type AnalysisStepProgress,
+  type DokokaraLine,
+  type DokokaraProject
+} from '@shared/types'
 import type { EditorAudioState } from '../state/editorStore'
-import type { AnalysisWorkerRequest, AnalysisWorkerResponse } from '../worker/analysisWorkerProtocol'
-import AnalysisWorker from '../worker/analysisWorker?worker'
+import type {
+  AnalysisDoneEvent,
+  AnalysisErrorEvent,
+  AnalysisProgressEvent,
+  AnalysisStartParams
+} from '@shared/ipc'
+import type { AnalyzeSidecarResult, AnalyzeSidecarLine } from '@shared/pythonSidecarProtocol'
 
-const STEP_ORDER: AnalysisStepId[] = [
-  'alignment',
-  'vocalIsolation',
-  'preprocess',
-  'pitch',
-  'onset',
-  'phrase',
-  'assign',
-  'tokenAllocate'
-]
+const STEP_ORDER: AnalysisStepId[] = ['vocalIsolation', 'pitch', 'phrase', 'assign']
 
 const STEP_LABELS: Record<AnalysisStepId, string> = {
-  alignment: 'STEP1 時間軸アライメント',
-  vocalIsolation: 'STEP2 差分ボーカル抽出',
-  preprocess: 'STEP3 前処理',
-  pitch: 'STEP4 ピッチ検出',
-  onset: 'STEP5 オンセット検出',
-  phrase: 'STEP6 フレーズ区間検出',
-  assign: 'STEP7 歌詞行への割り当て',
-  tokenAllocate: 'STEP8 文字タイミング配分'
+  vocalIsolation: 'ボーカル/伴奏分離',
+  pitch: 'F0抽出・ノート化',
+  phrase: 'フレーズ区間検出',
+  assign: '歌詞のタイミング付け'
+}
+
+// 検出されたフレーズ区間が歌詞行数より少ない場合、対応しなかった末尾の行に与える
+// 仮の長さ(§4.4.7: 完全自動を目指さず、ユーザーが編集画面でドラッグして直す前提のプレースホルダー)。
+const FALLBACK_LINE_DURATION_SEC = 2
+
+function generateLineId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  return `line-${Date.now()}-${Math.random().toString(36).slice(2)}`
 }
 
 /**
  * 解析中画面(§3 画面 #2, §4.4)。
- * 準備画面(setupDraft)の内容を元にWorkerで解析パイプラインを実行し、進捗を表示する。
+ * 準備画面(setupDraft)の内容を元にPythonサイドカーへ解析を依頼し、進捗を表示する。
  * 完了すると新規プロジェクトを編集画面へ引き渡す。
  */
 export function mountAnalyzingScreen(container: HTMLElement, ctx: AppContext): ScreenHandle {
@@ -49,7 +59,8 @@ export function mountAnalyzingScreen(container: HTMLElement, ctx: AppContext): S
 
   const stepStatus = new Map<AnalysisStepId, AnalysisStepProgress>()
   let cancelled = false
-  let worker: Worker | null = null
+  let jobId: string | null = null
+  let unsubscribe: (() => void) | null = null
 
   const header = el('h1', { className: 'analyzing-title' }, ['解析しています…'])
   const stepList = el('div', { className: 'analyzing-steps' })
@@ -70,8 +81,9 @@ export function mountAnalyzingScreen(container: HTMLElement, ctx: AppContext): S
     clear(stepList)
     for (const id of STEP_ORDER) {
       const status = stepStatus.get(id)?.status ?? 'pending'
+      const label = stepStatus.get(id)?.label ?? STEP_LABELS[id]
       const pill = el('span', { className: `step-pill${status === 'running' ? ' active' : ''}${status === 'done' ? ' done' : ''}` }, [
-        STEP_LABELS[id] + (status === 'skipped' ? '(スキップ)' : '')
+        label + (status === 'skipped' ? '(スキップ)' : '')
       ])
       stepList.appendChild(pill)
     }
@@ -84,10 +96,16 @@ export function mountAnalyzingScreen(container: HTMLElement, ctx: AppContext): S
     detailLabel.textContent = progress.detail ?? ''
   }
 
+  function stopListening(): void {
+    unsubscribe?.()
+    unsubscribe = null
+  }
+
   function cleanupAndReturnToSetup(message?: string): void {
     if (cancelled) return
     cancelled = true
-    worker?.terminate()
+    stopListening()
+    if (jobId) void window.dokokara.cancelAnalysis(jobId)
     if (message) notifyError(message)
     ctx.navigate('setup')
   }
@@ -98,91 +116,149 @@ export function mountAnalyzingScreen(container: HTMLElement, ctx: AppContext): S
 
   async function runAnalysis(): Promise<void> {
     const analysisAudio = draft.analysisAudio!
-    const playbackAudio = draft.playbackAudio
     const lyricsLines = parseLyricsLines(draft.lyricsText, draft.removeSpaces)
+    const totalDurationSec = analysisAudio.buffer.duration
 
-    const { channels: analysisChannels, sampleRate: analysisSampleRate } = extractChannelData(analysisAudio.buffer)
-    const playbackExtracted = playbackAudio ? extractChannelData(playbackAudio.buffer) : null
-
-    const totalDurationSec = playbackAudio ? playbackAudio.buffer.duration : analysisAudio.buffer.duration
-
-    worker = new AnalysisWorker()
-    const w = worker
-
-    w.onmessage = (event: MessageEvent<AnalysisWorkerResponse>) => {
-      if (cancelled) return
-      const msg = event.data
-      if (msg.type === 'progress') {
-        handleProgress(msg.progress)
-        return
-      }
-      if (msg.type === 'error') {
-        cleanupAndReturnToSetup(`解析に失敗しました: ${msg.message}`)
-        return
-      }
-      // msg.type === 'done'
-      finishAnalysis(msg)
-    }
-    w.onerror = (event: ErrorEvent) => {
-      cleanupAndReturnToSetup(`解析処理中にエラーが発生しました: ${event.message}`)
+    const offProgress = window.dokokara.onAnalysisProgress((event: AnalysisProgressEvent) => {
+      if (event.jobId !== jobId) return
+      handleProgress(event.progress)
+    })
+    const offDone = window.dokokara.onAnalysisDone((event: AnalysisDoneEvent) => {
+      if (event.jobId !== jobId) return
+      void finishAnalysis(event.result)
+    })
+    const offError = window.dokokara.onAnalysisError((event: AnalysisErrorEvent) => {
+      if (event.jobId !== jobId) return
+      cleanupAndReturnToSetup(`解析に失敗しました: ${event.message}`)
+    })
+    unsubscribe = () => {
+      offProgress()
+      offDone()
+      offError()
     }
 
-    const request: AnalysisWorkerRequest = {
-      analysis: { channels: analysisChannels.map((c) => c.buffer as ArrayBuffer), sampleRate: analysisSampleRate },
-      playback: playbackExtracted
-        ? { channels: playbackExtracted.channels.map((c) => c.buffer as ArrayBuffer), sampleRate: playbackExtracted.sampleRate }
-        : null,
+    const params: AnalysisStartParams = {
+      sourceAudioPath: analysisAudio.path,
       lyricsLines,
       totalDurationSec
     }
-    const transferList: Transferable[] = [
-      ...request.analysis.channels,
-      ...(request.playback?.channels ?? [])
-    ]
-    w.postMessage(request, transferList)
+
+    try {
+      const result = await window.dokokara.startAnalysis(params)
+      if (cancelled) {
+        void window.dokokara.cancelAnalysis(result.jobId)
+        return
+      }
+      jobId = result.jobId
+    } catch (e) {
+      cleanupAndReturnToSetup(`解析の開始に失敗しました: ${(e as Error).message}`)
+    }
   }
 
-  function finishAnalysis(msg: Extract<AnalysisWorkerResponse, { type: 'done' }>): void {
+  /** 歌詞行と自動アライメント結果を組み合わせ、トークン単位のタイミングまで含めて構築する(§4.4.7〜4.6.3)。 */
+  function buildLyricsLines(
+    lyricsLines: string[],
+    aligned: AnalyzeSidecarLine[],
+    notes: AnalyzeSidecarResult['notes'],
+    f0Hz: Float32Array
+  ): DokokaraLine[] {
+    const onsetsSec = notes.map((n) => n.start)
+    const frames = Array.from(f0Hz).map((hz, i) => ({ timeSec: i * DEFAULT_HOP_SEC, hz, voiced: hz > 0 }))
+    const pitchChangePoints = findPitchChangePoints(frames)
+
+    let fallbackCursor = aligned.length > 0 ? aligned[aligned.length - 1].end : 0
+
+    return lyricsLines.map((text, i) => {
+      const a: AnalyzeSidecarLine | undefined = aligned[i]
+      let start: number
+      let end: number
+      let confidence: number | null
+      if (a) {
+        start = a.start
+        end = a.end
+        confidence = a.confidence
+      } else {
+        start = fallbackCursor
+        end = start + FALLBACK_LINE_DURATION_SEC
+        confidence = null
+      }
+      fallbackCursor = end
+
+      const timedTokens = allocateTokenTimings(tokenizeLine(text), start, end, { onsetsSec, pitchChangePoints })
+      return {
+        id: generateLineId(),
+        text,
+        start,
+        end,
+        tokens: timedTokens.map((t) => ({ text: t.text, ruby: t.ruby, start: t.start, end: t.end, locked: false })),
+        confidence
+      }
+    })
+  }
+
+  async function finishAnalysis(result: AnalyzeSidecarResult): Promise<void> {
     if (cancelled) return
+    stopListening()
+
     const analysisAudio = draft.analysisAudio!
-    const playbackAudio = draft.playbackAudio
+    const lyricsLines = parseLyricsLines(draft.lyricsText, draft.removeSpaces)
+
+    let vocalsData: ArrayBuffer
+    let instrumentalData: ArrayBuffer
+    let f0Data: ArrayBuffer
+    try {
+      ;[vocalsData, instrumentalData, f0Data] = await Promise.all([
+        window.dokokara.readFileBuffer(result.vocalsPath),
+        window.dokokara.readFileBuffer(result.instrumentalPath),
+        window.dokokara.readFileBuffer(result.f0Path)
+      ])
+    } catch (e) {
+      cleanupAndReturnToSetup(`解析結果の読み込みに失敗しました: ${(e as Error).message}`)
+      return
+    }
+
+    const audioCtx = ctx.playback.audioContext
+    let vocalsBuffer: AudioBuffer
+    let instrumentalBuffer: AudioBuffer
+    try {
+      vocalsBuffer = await decodeAudio(audioCtx, vocalsData)
+      instrumentalBuffer = await decodeAudio(audioCtx, instrumentalData)
+    } catch (e) {
+      cleanupAndReturnToSetup((e as Error).message)
+      return
+    }
+
+    const f0Hz = new Float32Array(f0Data)
 
     const project: DokokaraProject = createEmptyProject(draft.projectName || '無題のプロジェクト')
     project.playback.defaultSource = ctx.settings.getState().defaultPerformSource
     project.audio.analysis = {
       originalFileName: analysisAudio.fileName,
-      path: `audio/vocal${analysisAudio.ext}`,
-      duration: analysisAudio.buffer.duration,
-      sampleRate: analysisAudio.buffer.sampleRate
+      path: 'audio/vocal.wav',
+      duration: vocalsBuffer.duration,
+      sampleRate: vocalsBuffer.sampleRate
     }
-    project.audio.playback = playbackAudio
-      ? {
-          originalFileName: playbackAudio.fileName,
-          path: `audio/off${playbackAudio.ext}`,
-          duration: playbackAudio.buffer.duration,
-          sampleRate: playbackAudio.buffer.sampleRate
-        }
-      : null
-    project.audio.alignmentOffsetSamples = msg.analysisResult.alignmentOffsetSamples
-    project.analysis.vocalIsolation = msg.analysisResult.vocalIsolationUsed
-    project.analysis.hopSec = msg.analysisResult.hopSec
-    project.analysis.frameCount = msg.analysisResult.pitchHz.byteLength / Float32Array.BYTES_PER_ELEMENT
-    project.analysis.phrases = msg.analysisResult.phrases
-    project.lyrics = msg.lines
+    project.audio.playback = {
+      originalFileName: analysisAudio.fileName,
+      path: 'audio/off.wav',
+      duration: instrumentalBuffer.duration,
+      sampleRate: instrumentalBuffer.sampleRate
+    }
+    project.analysis.notes = result.notes
+    project.analysis.phrases = result.phraseSegments
+    project.analysis.frameCount = f0Hz.length
+    project.lyrics = buildLyricsLines(lyricsLines, result.lyrics, result.notes, f0Hz)
 
     const audioState: EditorAudioState = {
-      analysisBuffer: analysisAudio.buffer,
-      playbackBuffer: playbackAudio?.buffer ?? null,
-      analysisSourcePath: analysisAudio.path,
-      playbackSourcePath: playbackAudio?.path ?? null,
-      analysisExt: analysisAudio.ext,
-      playbackExt: playbackAudio?.ext ?? null
+      analysisBuffer: vocalsBuffer,
+      playbackBuffer: instrumentalBuffer,
+      analysisSourcePath: result.vocalsPath,
+      playbackSourcePath: result.instrumentalPath,
+      analysisExt: '.wav',
+      playbackExt: '.wav'
     }
 
-    const pitchHz = new Float32Array(msg.analysisResult.pitchHz)
-    const onsetsSec = new Float32Array(msg.analysisResult.onsetsSec)
-
-    ctx.editor.loadProject(null, project, pitchHz, onsetsSec, audioState)
+    ctx.editor.loadProject(null, project, f0Hz, audioState)
     ctx.playback.setBuffer(
       project.playback.defaultSource === 'analysis' ? audioState.analysisBuffer : audioState.playbackBuffer ?? audioState.analysisBuffer
     )
@@ -192,7 +268,8 @@ export function mountAnalyzingScreen(container: HTMLElement, ctx: AppContext): S
   return {
     unmount() {
       cancelled = true
-      worker?.terminate()
+      stopListening()
+      if (jobId) void window.dokokara.cancelAnalysis(jobId)
       container.removeChild(root)
     }
   }

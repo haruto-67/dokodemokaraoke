@@ -1,7 +1,7 @@
 import type { AppContext } from '../appContext'
 import type { ScreenHandle } from '../lib/screen'
 import { el, clear, formatTime } from '../lib/dom'
-import type { DokokaraLine, DokokaraToken } from '@shared/types'
+import { DEFAULT_HOP_SEC, type DokokaraLine, type DokokaraToken } from '@shared/types'
 
 const INTERLUDE_THRESHOLD_SEC = 4
 const CONTROLS_FADE_MS = 2500
@@ -207,7 +207,7 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
     clear(pitchStripInner)
     const s = state()
     const pitchHz = s.pitchHz
-    const hopSec = s.project?.analysis.hopSec ?? 0.005
+    const hopSec = s.project?.analysis.hopSec ?? DEFAULT_HOP_SEC
     if (!pitchHz || pitchHz.length === 0) return
 
     const width = Math.max(1, totalDurationSec() * PPS)

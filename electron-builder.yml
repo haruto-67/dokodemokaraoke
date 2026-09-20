@@ -50,6 +50,10 @@ mac:
         UTTypeTagSpecification:
           public.filename-extension:
             - dokokara
+# 現状非対応: v3のPythonサイドカーはpython-build-standaloneのmacOS arm64版のみを前提に
+# ビルドしており(scripts/build-python-runtime.mjs)、以下のwin:ターゲット/npm run build:winは
+# 実行してもPythonサイドカーが同梱されず動作しない。設定自体は将来Windows向けPython
+# ランタイムを用意する可能性に備えて残す([[どこカラv3の技術選定]]参照)。
 win:
   target:
     - target: nsis

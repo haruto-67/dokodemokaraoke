@@ -38,8 +38,7 @@ async function toOpenResult(filePath: string): Promise<OpenProjectResult> {
           }
         : null
     },
-    pitchBin: loaded.pitchBin ? bufferToArrayBuffer(loaded.pitchBin) : null,
-    onsetsBin: loaded.onsetsBin ? bufferToArrayBuffer(loaded.onsetsBin) : null,
+    f0Bin: loaded.f0Bin ? bufferToArrayBuffer(loaded.f0Bin) : null,
     brokenParts: loaded.brokenParts
   }
 }
@@ -59,8 +58,7 @@ async function persist(payload: SaveProjectPayload, filePath: string): Promise<v
 
   await saveDokokaraFile(filePath, {
     json,
-    pitchBin: payload.pitchBin ? Buffer.from(payload.pitchBin) : null,
-    onsetsBin: payload.onsetsBin ? Buffer.from(payload.onsetsBin) : null,
+    f0Bin: payload.f0Bin ? Buffer.from(payload.f0Bin) : null,
     analysisAudio,
     playbackAudio
   })

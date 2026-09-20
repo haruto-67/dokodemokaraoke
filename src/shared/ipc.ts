@@ -1,5 +1,6 @@
 // renderer <-> main 間の contextBridge API 契約
 import type { AnalysisStepProgress, AppSettings, ProjectSummary, YtDlpUpdateResult } from './types'
+import type { AnalyzeSidecarResult } from './pythonSidecarProtocol'
 
 export const IPC = {
   listProjects: 'project:list',
@@ -52,16 +53,14 @@ export interface OpenProjectResult {
     analysis: { path: string; data: ArrayBuffer; mime: string } | null
     playback: { path: string; data: ArrayBuffer; mime: string } | null
   }
-  pitchBin: ArrayBuffer | null
-  onsetsBin: ArrayBuffer | null
+  f0Bin: ArrayBuffer | null
   brokenParts: string[]
 }
 
 export interface SaveProjectPayload {
   filePath: string | null
   json: unknown
-  pitchBin: ArrayBuffer | null
-  onsetsBin: ArrayBuffer | null
+  f0Bin: ArrayBuffer | null
   audio: {
     analysis: { sourcePath: string; ext: string } | null
     playback: { sourcePath: string; ext: string } | null
@@ -85,7 +84,7 @@ export interface AnalysisProgressEvent {
 
 export interface AnalysisDoneEvent {
   jobId: string
-  result: unknown
+  result: AnalyzeSidecarResult
 }
 
 export interface AnalysisErrorEvent {
