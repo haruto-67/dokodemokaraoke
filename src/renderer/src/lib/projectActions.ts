@@ -89,28 +89,30 @@ export function bufferForSource(audio: EditorAudioState, source: PlaySource): Au
 }
 
 export async function openProjectByPath(ctx: AppContext, filePath: string): Promise<void> {
-  let result
+  ctx.ui.setState({ loadingProject: true })
   try {
-    result = await window.dokokara.openProjectPath(filePath)
+    const result = await window.dokokara.openProjectPath(filePath)
+    if (!result) return
+    await applyOpenResult(ctx, result)
   } catch (e) {
     notifyError(`プロジェクトを開けませんでした: ${(e as Error).message}`)
-    return
+  } finally {
+    ctx.ui.setState({ loadingProject: false })
   }
-  if (!result) return
-  await applyOpenResult(ctx, result)
 }
 
 /** ホーム画面から、編集画面を経由せず直接本番画面でプロジェクトを開く(§3画面遷移)。 */
 export async function openProjectByPathForPerform(ctx: AppContext, filePath: string): Promise<void> {
-  let result
+  ctx.ui.setState({ loadingProject: true })
   try {
-    result = await window.dokokara.openProjectPath(filePath)
+    const result = await window.dokokara.openProjectPath(filePath)
+    if (!result) return
+    await applyOpenResult(ctx, result, result.filePath, 'perform')
   } catch (e) {
     notifyError(`プロジェクトを開けませんでした: ${(e as Error).message}`)
-    return
+  } finally {
+    ctx.ui.setState({ loadingProject: false })
   }
-  if (!result) return
-  await applyOpenResult(ctx, result, result.filePath, 'perform')
 }
 
 /** ⌘O: ダイアログでプロジェクトファイルを選んで開く */
@@ -123,7 +125,12 @@ export async function openProjectDialogFlow(ctx: AppContext): Promise<void> {
     return
   }
   if (!result) return
-  await applyOpenResult(ctx, result)
+  ctx.ui.setState({ loadingProject: true })
+  try {
+    await applyOpenResult(ctx, result)
+  } finally {
+    ctx.ui.setState({ loadingProject: false })
+  }
 }
 
 /** §4.1: クラッシュ後の復帰。バックアップの内容を「元のプロジェクトパス」に紐づけて読み込む。 */

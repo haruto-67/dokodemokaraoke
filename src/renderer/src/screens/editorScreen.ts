@@ -876,6 +876,24 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
     setZoom(scrollArea.clientWidth / (BASE_PPS * duration))
   })
 
+  // タッチパッドのピンチジェスチャーは、ブラウザ(Chromium)側でctrlKey付きwheelイベントとして
+  // 届く(実際にCtrlキーを押しながらのホイール操作と区別できないが、トラックパッド由来の
+  // ピンチ操作を検知する標準的な方法)。カーソル位置の時刻を保ったままズームする。
+  scrollArea.addEventListener(
+    'wheel',
+    (e) => {
+      if (!e.ctrlKey) return
+      e.preventDefault()
+      const rect = scrollArea.getBoundingClientRect()
+      const cursorOffsetX = e.clientX - rect.left
+      const timeAtCursor = (scrollArea.scrollLeft + cursorOffsetX) / pps()
+      const factor = Math.exp(-e.deltaY * 0.01)
+      setZoom(state().zoom * factor)
+      scrollArea.scrollLeft = timeAtCursor * pps() - cursorOffsetX
+    },
+    { passive: false }
+  )
+
   // ---------- オフセット調整(§4.11) ----------
   function adjustOffset(deltaMs: number): void {
     const s = state()

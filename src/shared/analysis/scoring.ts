@@ -28,6 +28,9 @@ export interface ScoringResult {
 export interface ScorePerformanceOptions {
   /** この半音数以内の差(オクターブ折りたたみ後)を「音程が合っている」とみなす */
   toleranceSemitones?: number
+  /** キー変更(移調、§4.12)の半音数。歌唱者は移調後の音程で歌うため、ノートのpitchMidiに
+   *  この値を加算してから比較する(analysis.notesの生データ自体は変更しない)。既定0。 */
+  keySemitones?: number
 }
 
 /**
@@ -53,6 +56,7 @@ export function scorePerformance(
   options: ScorePerformanceOptions = {}
 ): ScoringResult {
   const toleranceSemitones = options.toleranceSemitones ?? 1.0
+  const keySemitones = options.keySemitones ?? 0
 
   const noteBreakdowns: NoteScoreBreakdown[] = notes.map((note) => {
     // ノート区間外のサンプルは完全に無視する(ノートが存在しない時間の発声は減点対象にしない §4.12.3)
@@ -66,7 +70,7 @@ export function scorePerformance(
     }
 
     const correctCount = voicedSamplesInNote.filter((sample) => {
-      const diffSemitones = foldOctaveDiff(hzToMidi(sample.hz) - note.pitchMidi)
+      const diffSemitones = foldOctaveDiff(hzToMidi(sample.hz) - (note.pitchMidi + keySemitones))
       return Math.abs(diffSemitones) <= toleranceSemitones
     }).length
 

@@ -77,6 +77,9 @@ export interface DokokaraProject {
   playback: {
     offsetMs: number
     defaultSource: PlaySource
+    /** キー変更(移調、§4.12)。半音単位、0で原曲キーのまま。テンポは変えずピッチだけシフトする。
+     *  曲によって歌いやすいキーが違うためプロジェクト単位で保持する(環境単位のmicLatencyCompensationMs等とは別物)。 */
+    keySemitones: number
   }
 
   analysis: {
@@ -111,7 +114,8 @@ export function createEmptyProject(name: string): DokokaraProject {
     },
     playback: {
       offsetMs: 0,
-      defaultSource: 'playback'
+      defaultSource: 'playback',
+      keySemitones: 0
     },
     analysis: {
       separation: 'melband-roformer',
@@ -137,6 +141,10 @@ export interface AppSettings {
   bigSeekStepSec: number
   defaultPerformSource: PlaySource
   countInEnabled: boolean
+  /** 再生開始時に1回鳴らす簡易ジングル(ピアノ風の分散和音)のオン/オフ */
+  keyJingleEnabled: boolean
+  /** ガイドボーカル(分離済みボーカル音源を伴奏に重ねて流す)の音量。0で無効(従来通り伴奏のみ) */
+  guideVocalVolume: number
   /** 採点用マイク入力デバイス(§4.12.1)。nullはブラウザ既定デバイスを使う */
   micDeviceId: string | null
   /** 入出力遅延補正(§4.12.2)。playback.offsetMs(曲ごとの字幕表示調整)とは別物で、
@@ -153,6 +161,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   bigSeekStepSec: 5,
   defaultPerformSource: 'playback',
   countInEnabled: true,
+  keyJingleEnabled: true,
+  guideVocalVolume: 0,
   micDeviceId: null,
   micLatencyCompensationMs: 0
 }

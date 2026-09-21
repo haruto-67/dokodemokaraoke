@@ -89,4 +89,18 @@ describe('scorePerformance', () => {
     expect(withDefaultTolerance.notes[0].accuracy).toBe(1)
     expect(withNarrowTolerance.notes[0].accuracy).toBe(0)
   })
+
+  it('keySemitonesを指定すると、移調した分だけ歌唱ピッチとの比較基準がずれる', () => {
+    // ノートはMIDI69(A4=440Hz)だが、2半音上げて歌う(キー+2)前提なので、
+    // 歌唱ピッチはB4(MIDI71)相当のHzが正解になるはず。
+    const notes = [note(0, 1, 69)]
+    const bFlat4Hz = 440 * Math.pow(2, 2 / 12)
+    const sungPitch: SungPitchSample[] = [{ timeSec: 0.5, hz: bFlat4Hz }]
+
+    const withoutKeyShift = scorePerformance(notes, sungPitch)
+    const withKeyShift = scorePerformance(notes, sungPitch, { keySemitones: 2 })
+
+    expect(withoutKeyShift.notes[0].accuracy).toBe(0)
+    expect(withKeyShift.notes[0].accuracy).toBe(1)
+  })
 })

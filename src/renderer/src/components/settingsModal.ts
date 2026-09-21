@@ -87,6 +87,22 @@ export function mountSettingsModal(root: HTMLElement, ctx: AppContext): void {
   countInInput.addEventListener('change', () => void patchSettings({ countInEnabled: countInInput.checked }))
   countInRow.control.appendChild(countInInput)
 
+  // --- キー提示ジングル(§4.12) ---
+  const jingleRow = settingsRow('再生開始時のジングル')
+  const jingleInput = el('input', { type: 'checkbox' }) as HTMLInputElement
+  jingleInput.addEventListener('change', () => void patchSettings({ keyJingleEnabled: jingleInput.checked }))
+  jingleRow.control.appendChild(jingleInput)
+
+  // --- ガイドボーカル音量(§4.12) ---
+  const guideVocalRow = settingsRow('ガイドボーカルの音量')
+  const guideVocalInput = el('input', { type: 'range', min: '0', max: '1', step: '0.05' }) as HTMLInputElement
+  const guideVocalValueLabel = el('span', { className: 'mono settings-path' }, ['0%'])
+  guideVocalInput.addEventListener('input', () => {
+    guideVocalValueLabel.textContent = `${Math.round(Number(guideVocalInput.value) * 100)}%`
+  })
+  guideVocalInput.addEventListener('change', () => void patchSettings({ guideVocalVolume: Number(guideVocalInput.value) }))
+  guideVocalRow.control.append(guideVocalInput, guideVocalValueLabel)
+
   // --- 採点用マイク入力デバイス・入力レベルメーター(§4.12.1) ---
   const micRow = settingsRow('採点用マイク入力')
   const micSelect = el('select', { className: 'editor-select' }) as HTMLSelectElement
@@ -209,6 +225,8 @@ export function mountSettingsModal(root: HTMLElement, ctx: AppContext): void {
     bigSeekRow.row,
     sourceRow.row,
     countInRow.row,
+    jingleRow.row,
+    guideVocalRow.row,
     micRow.row,
     latencyRow.row,
     ytDlpRow.row
@@ -233,6 +251,9 @@ export function mountSettingsModal(root: HTMLElement, ctx: AppContext): void {
     bigSeekInput.value = String(s.bigSeekStepSec)
     sourceSelect.value = s.defaultPerformSource
     countInInput.checked = s.countInEnabled
+    jingleInput.checked = s.keyJingleEnabled
+    guideVocalInput.value = String(s.guideVocalVolume)
+    guideVocalValueLabel.textContent = `${Math.round(s.guideVocalVolume * 100)}%`
     latencyValueLabel.textContent = `${s.micLatencyCompensationMs}ms`
   }
 

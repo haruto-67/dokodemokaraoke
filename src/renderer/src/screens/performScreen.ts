@@ -3,8 +3,10 @@ import type { ScreenHandle } from '../lib/screen'
 import { el, clear, formatTime } from '../lib/dom'
 import type { DokokaraLine, DokokaraToken, PlaySource } from '@shared/types'
 import { scorePerformance, type SungPitchSample } from '@shared/analysis/scoring'
+import { computeTokenPitchesMidi } from '@shared/analysis/tokenPitch'
 import { startMicPitchDetection, type MicPitchSession } from '../audio/micPitchInput'
 import { bufferForSource } from '../lib/projectActions'
+import { playCountInClick, playStartJingle } from '../audio/performCues'
 
 const INTERLUDE_THRESHOLD_SEC = 4
 const CONTROLS_FADE_MS = 2500
@@ -74,8 +76,12 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
     el('option', { value: 'analysis' }, ['ボーカルのみ'])
   )
   const fullscreenBtn = el('button', { className: 'btn btn-ghost' }, ['⛶ フルスクリーン'])
+  // ---------- キー変更(移調、§4.12) ----------
+  const keyDownBtn = el('button', { className: 'btn btn-ghost' }, ['キー♭'])
+  const keyLabel = el('span', { className: 'mono perform-key-label' }, ['±0'])
+  const keyUpBtn = el('button', { className: 'btn btn-ghost' }, ['♯'])
   const timeLabel = el('span', { className: 'mono perform-time' }, ['0:00.00'])
-  controls.append(homeBtn, backBtn, playBtn, restartBtn, sourceSelect, fullscreenBtn, timeLabel)
+  controls.append(homeBtn, backBtn, playBtn, restartBtn, sourceSelect, keyDownBtn, keyLabel, keyUpBtn, fullscreenBtn, timeLabel)
 
   const offsetIndicator = el('div', { className: 'perform-offset-indicator' })
   const micNotice = el('div', { className: 'perform-mic-notice' })
@@ -135,12 +141,26 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
   }
   void setupScoring()
 
+  // ---------- ガイドボーカル(§4.12: 伴奏に分離済みボーカル音源を小さい音量で重ねて流す) ----------
+  // 本番画面でのみ有効にし、離れる時は必ず解除する(PlaybackEngineはeditor画面とも共有する
+  // シングルトンのため、ここで付けたオーバーレイが編集画面に漏れないようにするため)。
+  // 再生ソース自体が既に「ボーカルのみ」の時は、同じ音源を重ねても意味が無いので無効にする。
+  function syncGuideVocalOverlay(): void {
+    const s = state()
+    const overlayBuffer = s.playSource === 'analysis' ? null : s.audio.analysisBuffer
+    ctx.playback.setOverlayBuffer(overlayBuffer)
+  }
+  syncGuideVocalOverlay()
+  ctx.playback.setOverlayVolume(ctx.settings.getState().guideVocalVolume)
+  const unsubGuideVocalVolume = ctx.settings.subscribe((s) => ctx.playback.setOverlayVolume(s.guideVocalVolume))
+
   function finishAndShowResult(): void {
     micSession?.stop()
     micSession = null
     const s = state()
     const notes = s.project?.analysis.notes ?? []
-    const result = scorePerformance(notes, sungPitchSamples)
+    const keySemitones = s.project?.playback.keySemitones ?? 0
+    const result = scorePerformance(notes, sungPitchSamples, { keySemitones })
     ctx.ui.setState({ lastScoreResult: result })
     ctx.navigate('result')
   }
@@ -149,20 +169,27 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
   // ---------- ナビゲーション・再生操作 ----------
   homeBtn.addEventListener('click', () => ctx.navigate('home'))
   backBtn.addEventListener('click', () => ctx.navigate('editor'))
+  // 再生開始時のジングル(§4.12「キー提示」)は、曲の冒頭(位置0)から始める時だけ鳴らす。
+  // 一時停止からの再開のたびに鳴ると煩わしいため。
+  function startPlayback(): void {
+    if (ctx.settings.getState().keyJingleEnabled && ctx.playback.getCurrentTime() === 0) {
+      playStartJingle(ctx.playback.audioContext)
+    }
+    ctx.playback.play()
+    playBtn.textContent = '⏸'
+  }
   function togglePlay(): void {
     if (ctx.playback.isPlaying()) {
       ctx.playback.pause()
       playBtn.textContent = '▶'
     } else {
-      ctx.playback.play()
-      playBtn.textContent = '⏸'
+      startPlayback()
     }
   }
   playBtn.addEventListener('click', togglePlay)
   restartBtn.addEventListener('click', () => {
     ctx.playback.seek(0)
-    ctx.playback.play()
-    playBtn.textContent = '⏸'
+    startPlayback()
   })
 
   sourceSelect.value = state().playSource
@@ -170,6 +197,7 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
     const src = sourceSelect.value as PlaySource
     ctx.editor.store.setState({ playSource: src })
     ctx.playback.setBuffer(bufferForSource(state().audio, src))
+    syncGuideVocalOverlay()
   })
 
   function toggleFullscreen(): void {
@@ -180,6 +208,29 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
 
   // ---------- オフセット調整(§4.11) ----------
   let offsetIndicatorTimer: ReturnType<typeof setTimeout> | null = null
+  // 移調中のPitchShifter経路は音質面でコストがあるため、既定(半音0)の間は通常経路のまま。
+  function syncKeyLabel(semitones: number): void {
+    keyLabel.textContent = semitones === 0 ? '±0' : semitones > 0 ? `+${semitones}` : String(semitones)
+  }
+  function adjustKey(delta: number): void {
+    const s = state()
+    if (!s.project) return
+    // 既存プロジェクト(このフィールド追加前に保存されたもの)ではkeySemitonesが
+    // undefinedのことがあるため、演算前に必ず既定値0にフォールバックする。
+    const newSemitones = (s.project.playback.keySemitones ?? 0) + delta
+    ctx.editor.store.setState({ project: { ...s.project, playback: { ...s.project.playback, keySemitones: newSemitones } } })
+    ctx.playback.setPitchShiftSemitones(newSemitones)
+    syncKeyLabel(newSemitones)
+    renderPitchStrip()
+  }
+  keyDownBtn.addEventListener('click', () => adjustKey(-1))
+  keyUpBtn.addEventListener('click', () => adjustKey(1))
+  {
+    const initialKeySemitones = state().project?.playback.keySemitones ?? 0
+    ctx.playback.setPitchShiftSemitones(initialKeySemitones)
+    syncKeyLabel(initialKeySemitones)
+  }
+
   function adjustOffset(deltaMs: number): void {
     const s = state()
     if (!s.project) return
@@ -244,20 +295,24 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
   }
 
   // ---------- カウントイン・間奏カウントダウン ----------
+  let lastCountdownValue: string | null = null
+  function resetCountdown(): void {
+    countdownEl.textContent = ''
+    countdownEl.classList.remove('visible')
+    lastCountdownValue = null
+  }
   function renderCountdown(t: number): void {
     const all = lines()
     const settings = ctx.settings.getState()
     const currentIdx = all.findIndex((l) => t >= l.start && t < l.end)
     if (currentIdx !== -1) {
-      countdownEl.textContent = ''
-      countdownEl.classList.remove('visible')
+      resetCountdown()
       return
     }
 
     const nextIdx = all.findIndex((l) => l.start > t)
     if (nextIdx === -1) {
-      countdownEl.textContent = ''
-      countdownEl.classList.remove('visible')
+      resetCountdown()
       return
     }
     const next = all[nextIdx]
@@ -267,12 +322,19 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
     const gap = next.start - prevEnd
     const shouldCountdown = isIntro ? settings.countInEnabled : gap >= INTERLUDE_THRESHOLD_SEC
     if (!shouldCountdown) {
-      countdownEl.textContent = ''
-      countdownEl.classList.remove('visible')
+      resetCountdown()
       return
     }
     const remain = Math.max(0, next.start - t)
-    countdownEl.textContent = String(Math.ceil(remain))
+    const value = String(Math.ceil(remain))
+    // 数字が切り替わった瞬間だけクリック音を鳴らす(§4.12「カウントインに音を追加する」)。
+    // 表示自体はcountInEnabledに関わらず更新されるため、音もその挙動に合わせる
+    // (間奏カウントダウンにも同じ音を鳴らす。既存の数字表示と対称にするための判断)。
+    if (value !== lastCountdownValue && ctx.playback.isPlaying()) {
+      playCountInClick(ctx.playback.audioContext)
+    }
+    lastCountdownValue = value
+    countdownEl.textContent = value
     countdownEl.classList.add('visible')
   }
 
@@ -285,7 +347,10 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
     clear(pitchStripInner)
     const s = state()
     const notes = s.project?.analysis.notes ?? []
-    if (notes.length === 0) return
+    const keySemitones = s.project?.playback.keySemitones ?? 0
+    const allTokens = (s.project?.lyrics ?? []).flatMap((line) => line.tokens)
+    if (allTokens.length === 0) return
+    const tokenPitchesMidi = computeTokenPitchesMidi(allTokens, notes)
 
     const width = Math.max(1, totalDurationSec() * PPS)
     pitchStripInner.style.width = `${width}px`
@@ -296,24 +361,30 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
     svg.setAttribute('width', String(width))
     svg.setAttribute('height', String(PITCH_STRIP_HEIGHT))
 
-    // お手本メロディを、ノート(§4.4.4、RMVPE→Basic Pitchで既に量子化済み)単位の水平バーで
-    // 描画する(DAM等の採点画面のような「階段状」の見た目、実データ・タイミング計算には
-    // 一切手を入れず縦方向の描画方法だけを変更する)。連続する2ノートの間隔が十分短ければ
-    // 縦線で段差を繋ぎ、無音区間(間隔が大きい)は空白のままにする。
+    // お手本メロディを、歌詞トークン(文字/ルビ単位、§4.6.1で既にモーラ重み配分・ルビ対応
+    // 済みのtoken.start/endをそのまま使う)単位の水平バーで描画する(DAM等の採点画面のような
+    // 「階段状」の見た目)。ノート単位(RMVPE→Basic Pitchの検出区間そのまま)だと歌詞の
+    // 文字送りタイミングと視覚的にズレて精度が悪く見える、という指摘への対応。各トークンの
+    // ピッチは重なるノートの重み付け平均(computeTokenPitchesMidi)。連続するトークンの間隔が
+    // 十分短ければ縦線で段差を繋ぎ、無声トークン・間隔が大きい所は空白のままにする。
     let d = ''
-    for (let i = 0; i < notes.length; i++) {
-      const note = notes[i]
-      const xStart = note.start * PPS
-      const xEnd = note.end * PPS
-      const y = yForHz(midiToHz(note.pitchMidi))
-      d += `M${xStart.toFixed(1)},${y.toFixed(1)} L${xEnd.toFixed(1)},${y.toFixed(1)} `
-
-      const next = notes[i + 1]
-      if (next && next.start - note.end <= NOTE_CONNECT_THRESHOLD_SEC) {
-        const xNextStart = next.start * PPS
-        const yNext = yForHz(midiToHz(next.pitchMidi))
-        d += `L${xNextStart.toFixed(1)},${y.toFixed(1)} L${xNextStart.toFixed(1)},${yNext.toFixed(1)} `
+    let prevPlotted: { end: number; y: number } | null = null
+    for (let i = 0; i < allTokens.length; i++) {
+      const midi = tokenPitchesMidi[i]
+      if (midi === null) {
+        prevPlotted = null
+        continue
       }
+      const token = allTokens[i]
+      const xStart = token.start * PPS
+      const xEnd = token.end * PPS
+      const y = yForHz(midiToHz(midi + keySemitones))
+      if (prevPlotted && token.start - prevPlotted.end <= NOTE_CONNECT_THRESHOLD_SEC) {
+        d += `L${xStart.toFixed(1)},${prevPlotted.y.toFixed(1)} L${xStart.toFixed(1)},${y.toFixed(1)} L${xEnd.toFixed(1)},${y.toFixed(1)} `
+      } else {
+        d += `M${xStart.toFixed(1)},${y.toFixed(1)} L${xEnd.toFixed(1)},${y.toFixed(1)} `
+      }
+      prevPlotted = { end: token.end, y }
     }
     const path = document.createElementNS(ns, 'path')
     path.setAttribute('d', d)
@@ -379,8 +450,7 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
     if (e.key === 'Enter') {
       e.preventDefault()
       ctx.playback.seek(0)
-      ctx.playback.play()
-      playBtn.textContent = '⏸'
+      startPlayback()
       return
     }
     if (e.key === 'Escape' && document.fullscreenElement) {
@@ -402,6 +472,9 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
     unmount() {
       disposed = true
       ctx.playback.onEnded(null)
+      ctx.playback.setOverlayBuffer(null)
+      ctx.playback.setPitchShiftSemitones(0)
+      unsubGuideVocalVolume()
       micSession?.stop()
       micSession = null
       if (rafId !== null) cancelAnimationFrame(rafId)

@@ -23,7 +23,8 @@
     "test:python": "resources/python-runtime/bin/python3 -m unittest discover -s python/sidecar -p '*_test.py' -v"
   },
   "dependencies": {
-    "jszip": "3.10.1"
+    "jszip": "3.10.1",
+    "soundtouchjs": "^0.3.0"
   },
   "devDependencies": {
     "@types/node": "22.10.2",

@@ -47,6 +47,9 @@ export interface UiState {
   setupDraft: SetupDraft
   /** リザルト画面(§4.12.4)へ渡す採点結果。プロジェクトには保存せず、その場限りの表示に使う */
   lastScoreResult: ScoringResult | null
+  /** プロジェクトの読み込み中(ZIP展開・音声デコード)にローディング表示を出すためのフラグ。
+   *  ボタンを押してから画面遷移までラグがあり押せたか分かりにくい、という報告への対応。 */
+  loadingProject: boolean
 }
 
 export interface AppContext {
@@ -67,7 +70,8 @@ export function createAppContext(initialSettings: AppSettings): AppContext {
     settingsOpen: false,
     homeSummaries: [],
     setupDraft: emptySetupDraft(),
-    lastScoreResult: null
+    lastScoreResult: null,
+    loadingProject: false
   })
   const settings = new Store<AppSettings>(initialSettings)
   const playback = new PlaybackEngine()

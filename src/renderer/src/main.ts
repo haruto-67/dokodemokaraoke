@@ -6,9 +6,11 @@ import './styles/editor.css'
 import './styles/perform.css'
 import './styles/result.css'
 import './styles/settings.css'
+import './styles/loading.css'
 import { createAppContext } from './appContext'
 import { createRouter } from './app'
 import { mountSettingsModal } from './components/settingsModal'
+import { mountLoadingOverlay } from './components/loadingOverlay'
 import {
   saveProject,
   backupProject,
@@ -42,6 +44,7 @@ async function bootstrap(): Promise<void> {
 
   createRouter(root, ctx)
   mountSettingsModal(root, ctx)
+  mountLoadingOverlay(root, ctx)
 
   // ネイティブメニュー(menu.ts)からのアクション(§4.9.2 ファイル操作・Undo/Redo と対応)
   window.dokokara.onMenuAction((action) => {

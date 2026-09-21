@@ -17,6 +17,11 @@ const SCREEN_MOUNTS: Record<ScreenName, ScreenMount> = {
   result: mountResultScreen
 }
 
+// 音源再生の主導権を持つのはeditor/perform画面のみ。それ以外へ遷移する時は
+// ctx.playback(シングルトン)を明示的に止めないと、ホーム等に戻っても再生し続けたままになる
+// (画面のunmountはDOM/UI状態を消すだけで、共有のPlaybackEngineには何もしないため。実機で報告)。
+const SCREENS_WITH_PLAYBACK: ReadonlySet<ScreenName> = new Set(['editor', 'perform'])
+
 /**
  * §3 の画面遷移を ctx.ui.screen の変化に応じて実現するルーター。
  * 画面ごとに DOM をマウント/アンマウントする。
@@ -27,6 +32,7 @@ export function createRouter(root: HTMLElement, ctx: AppContext): () => void {
 
   function render(screen: ScreenName): void {
     if (screen === currentScreen) return
+    if (!SCREENS_WITH_PLAYBACK.has(screen) && ctx.playback.isPlaying()) ctx.playback.pause()
     current?.unmount()
     root.classList.remove(...Array.from(root.classList).filter((c) => c.startsWith('screen-')))
     root.classList.add(`screen-${screen}`)
