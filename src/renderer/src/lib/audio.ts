@@ -51,6 +51,14 @@ export class PlaybackEngine {
   private pitchShiftSemitones = 0
   private shifter: PitchShifter | null = null
   private overlayShifter: PitchShifter | null = null
+  // soundtouchjsのPitchShifterは、コンストラクタに渡したonEndコールバックを内部の
+  // ScriptProcessorNode(のonaudioprocess)に直接焼き込んでおり、.off()/.disconnect()では
+  // 無効化できない(off()は別系統の'play'イベントリスナーにしか効かない)。disconnect()後も
+  // 既にオーディオスレッド側でスケジュール済みのonaudioprocessが1回だけ遅れて発火し、
+  // 古いshifterのonEnd(=曲終了扱い)が呼ばれてしまうことがある(キー変更のたびに新しい
+  // shifterを作り直す都合上、これが「キー変更すると曲が途中で終了判定になる」不具合の原因)。
+  // stopSourceOnly()でこのガードをfalseにしてから捨てることで、遅延発火を無視できるようにする。
+  private shifterEndedGuard: { active: boolean } | null = null
 
   constructor() {
     this.audioContext = new AudioContext()
@@ -110,21 +118,25 @@ export class PlaybackEngine {
     offsetSec: number,
     destination: GainNode,
     onEnded: (() => void) | null
-  ): { source: AudioBufferSourceNode | null; shifter: PitchShifter | null } {
+  ): { source: AudioBufferSourceNode | null; shifter: PitchShifter | null; endedGuard: { active: boolean } | null } {
     if (this.pitchShiftSemitones !== 0) {
-      const shifter = new PitchShifter(this.audioContext, buffer, PITCH_SHIFTER_BUFFER_SIZE, () => onEnded?.())
+      const endedGuard = onEnded ? { active: true } : null
+      const shifter = new PitchShifter(this.audioContext, buffer, PITCH_SHIFTER_BUFFER_SIZE, () => {
+        if (endedGuard && !endedGuard.active) return
+        onEnded?.()
+      })
       shifter.tempo = 1
       shifter.pitchSemitones = this.pitchShiftSemitones
       shifter.percentagePlayed = buffer.duration > 0 ? (offsetSec / buffer.duration) * 100 : 0
       shifter.connect(destination)
-      return { source: null, shifter }
+      return { source: null, shifter, endedGuard }
     }
     const src = this.audioContext.createBufferSource()
     src.buffer = buffer
     src.connect(destination)
     src.start(0, offsetSec)
     if (onEnded) src.onended = onEnded
-    return { source: src, shifter: null }
+    return { source: src, shifter: null, endedGuard: null }
   }
 
   play(fromSec?: number): void {
@@ -139,6 +151,7 @@ export class PlaybackEngine {
     })
     this.source = main.source
     this.shifter = main.shifter
+    this.shifterEndedGuard = main.endedGuard
     this.startedAtCtxTime = this.audioContext.currentTime
     this.startOffsetSec = offset
     this.playing = true
@@ -177,6 +190,8 @@ export class PlaybackEngine {
       this.source = null
     }
     if (this.shifter) {
+      if (this.shifterEndedGuard) this.shifterEndedGuard.active = false
+      this.shifterEndedGuard = null
       this.shifter.off()
       this.shifter.disconnect()
       this.shifter = null

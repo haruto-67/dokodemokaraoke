@@ -9,10 +9,23 @@
   overflow: hidden;
   background: var(--color-bg);
   cursor: none;
-  -webkit-app-region: drag;
 }
 .perform-screen:hover {
   cursor: default;
+}
+
+/* ウィンドウ移動用のドラッグ領域(§4.10)。画面全体をdrag指定すると、Electron/Chromiumの
+   既知の挙動でその領域上のmousemove等がレンダラのJSまで届かなくなり、コントロールバー
+   (no-drag指定済み)以外ではUIの自動表示が一切効かなくなる不具合があった。ウィンドウ移動が
+   必要な範囲(上端の帯、titleBarStyle: hiddenInsetの信号機ボタン周辺)だけに絞ることで、
+   それ以外の主要エリアでmousemove/hoverが正常に機能するようにする。 */
+.perform-drag-handle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 36px;
+  -webkit-app-region: drag;
 }
 
 .perform-progress {

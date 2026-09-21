@@ -73,6 +73,11 @@ dmg:
 # afterPackで署名するとfuses書き込み時にバイナリが変更され署名が壊れる(実機で確認済み)。
 # fuses書き込み後に確実に走るafterSignで署名する。
 afterSign: build/afterSign.cjs
+# DMG生成(dmg-builder)が完全に終わった"後"に、DMG内の.appフォルダ名をproductName(日本語)へ
+# リネームして再パッケージする(Nestio「アプリ名」タスク)。afterSignの時点(dmg-builderより前)で
+# リネームするとdmg-builder自身がexecutableName由来の元パスを参照してビルドごと失敗するため、
+# この段階まで待つ必要がある。詳細はbuild/afterAllArtifactBuild.cjs冒頭のコメント参照。
+afterAllArtifactBuild: build/afterAllArtifactBuild.cjs
 # electron-builderが既定で有効化するElectron Fuses(embeddedAsarIntegrityValidation等)が、
 # 実機でSIGTRAPクラッシュを引き起こすことを検証で確認したため無効化する。
 # ad-hoc署名かつ2名限定配布のためasar改ざん検知等のハードニングは必須ではない。

@@ -29,9 +29,16 @@ export function mountHomeScreen(container: HTMLElement, ctx: AppContext): Screen
     el('h1', { className: 'home-title' }, ['どこでもカラオケセット']),
     el('p', { className: 'home-subtitle' }, ['手持ちの楽曲から、自分専用のカラオケを作る'])
   ])
+  const settingsBtn = el('button', { className: 'btn btn-ghost' }, ['⚙ 設定'])
+  settingsBtn.addEventListener('click', () => ctx.openSettings())
   const newBtn = el('button', { className: 'btn btn-primary' }, ['+ 新規作成'])
   newBtn.addEventListener('click', () => createNewProjectFlow(ctx))
-  header.append(titleWrap, newBtn)
+  const headerActions = el(
+    'div',
+    { style: { display: 'flex', gap: '10px', alignItems: 'flex-end' } as unknown as CSSStyleDeclaration },
+    [settingsBtn, newBtn]
+  )
+  header.append(titleWrap, headerActions)
 
   const toolbar = el('div', { className: 'home-toolbar' })
   const searchInput = el('input', {

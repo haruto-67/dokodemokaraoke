@@ -14,6 +14,7 @@ import {
 import type { AnalyzeSidecarResult } from '../shared/pythonSidecarProtocol'
 import { PythonSidecar } from './pythonSidecar'
 import { getModelsDir, getPythonExecutablePath, getPythonSidecarScriptPath } from './pythonRuntime'
+import { normalizeAudioToWav } from './mediaTools'
 
 /**
  * サイドカーに渡す環境変数。ライブラリ既定のキャッシュ(~/.cache/huggingface等)や
@@ -47,6 +48,19 @@ export function registerAnalysisHandlers(getWindow: () => BrowserWindow | null):
   ipcMain.handle(IPC.startAnalysis, async (_e, params: AnalysisStartParams): Promise<AnalysisStartResult> => {
     const jobId = randomUUID()
     const workDir = await mkdtemp(join(tmpdir(), 'dokokara-analysis-'))
+
+    // STEP1(音源取得の正規化): ローカルファイル入力はYouTube取り込みと違い任意の
+    // コンテナ形式(m4a等)のままここに来るため、Pythonのsoundfile(libsndfile)が
+    // 確実に読めるWAVへ先に変換する(m4aで「Format not recognised」となり解析全体が
+    // 失敗していた不具合の修正。詳細はmediaTools.tsのnormalizeAudioToWavコメント参照)。
+    const normalizedSourcePath = join(workDir, 'source-normalized.wav')
+    try {
+      await normalizeAudioToWav(params.sourceAudioPath, normalizedSourcePath)
+    } catch (err) {
+      await rm(workDir, { recursive: true, force: true })
+      throw new Error(`音源の変換(ffmpeg)に失敗しました: ${(err as Error).message}`)
+    }
+
     const sidecar = new PythonSidecar(getPythonExecutablePath(), [getPythonSidecarScriptPath()], {
       env: buildSidecarEnv(),
       onProgress: (_id, progress) => {
@@ -58,7 +72,7 @@ export function registerAnalysisHandlers(getWindow: () => BrowserWindow | null):
     sidecar.start()
 
     sidecar
-      .request({ id: jobId, method: 'analyze', params: { ...params, workDir } })
+      .request({ id: jobId, method: 'analyze', params: { ...params, sourceAudioPath: normalizedSourcePath, workDir } })
       .then((result) => {
         const event: AnalysisDoneEvent = { jobId, result: result as AnalyzeSidecarResult }
         getWindow()?.webContents.send(IPC.onAnalysisDone, event)

@@ -367,6 +367,18 @@ def align_lyrics_lines_to_song(
     config = ctc_seg.CtcSegmentationParameters()
     config.index_duration = WAV2VEC2_STRIDE_SAMPLES / WAV2VEC2_SAMPLE_RATE
     config.blank = blank_id
+    # 既定値(8000フレーム=160秒相当)のままだと、間奏やAメロ前の長いイントロを挟む曲で
+    # 歌詞が曲冒頭のごく短い区間に圧縮されてしまう不具合があった(実機で確認)。
+    # ctc-segmentationは元々「発話間の無音区間が短い」オーディオブック用途を想定した既定値のため、
+    # 曲全体のフレーム数をそのまま初期ウィンドウ幅にして、どんな長さの間奏を挟んでも
+    # 最初から曲全体を見渡せるようにする(公式ドキュメントも「行の間隔が離れているなら
+    # 増やすこと」と明記: https://espnet.github.io/espnet/_modules/espnet2/bin/asr_align.html)。
+    config.min_window_size = max(config.min_window_size, lpz.shape[0])
+    # ctc-segmentationの既定(False)は「発話間のblank(無音)区間を通過するコストがゼロでない」
+    # ため、DPが「後半の長いインスト区間を実コストを払って通過する」より「前半の短い区間に
+    # 全歌詞を詰め込む」方を安く見積もってしまう問題があった。Trueにして、歌詞行間の
+    # blank通過を無料にする(ctc-segmentation本来の間奏対応の使い方)。
+    config.blank_transition_cost_zero = True
     # char_listはデバッグ用状態表示にのみ使われアライメント計算自体には影響しない
     # (ctc_segmentation.ctc_segmentation実装で確認済み)。vocab.json未収録の特殊トークン
     # id(vocab_size-1のblankを含む)にはWav2Vec2Vocab.decode_singleが"<unk>"を返す。

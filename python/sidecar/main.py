@@ -10,7 +10,8 @@ Electronのメインプロセスと stdin/stdout 経由でJSON-RPC風メッセ�
 - STEP4 ノート化(Basic Pitch連携) -- f0_notes.py
 - STEP5/6/7 歌詞行リストの一括タイミング付け(モーラ読み変換+ctc-segmentation) -- lyrics_align.py
 
-STEP1(音源取得の正規化)は未実装。
+STEP1(音源取得の正規化)はこのサイドカーではなく呼び出し側(src/main/analysisManager.ts、
+同梱ffmpegでWAVへ変換)で行う。source_audio_pathは常に正規化済みWAVである前提でよい。
 
 歌詞タイミング付けは、歌詞行N行を「曲全体のvocals音声」に対して一括で
 アライメントする(ctc-segmentation使用)。旧実装はSilero VADで先にフレーズ

@@ -66,6 +66,21 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
   const offsetLabel = el('span', { className: 'mono editor-offset' }, ['0ms'])
   const reallocateBtn = el('button', { className: 'btn btn-ghost' }, ['この行を再配分'])
 
+  // --- 曲ごとの4カウント/キー提示ジングルのオン/オフ(§4.12) ---
+  // アプリ全体設定(⌘,)は既定値の扱いで、ここでの選択が優先される。「既定」はアプリ全体設定に従う。
+  const countInSelect = el('select', { className: 'editor-select' }) as HTMLSelectElement
+  countInSelect.append(
+    el('option', { value: 'default' }, ['4カウント: 既定']),
+    el('option', { value: 'on' }, ['4カウント: オン']),
+    el('option', { value: 'off' }, ['4カウント: オフ'])
+  )
+  const jingleSelect = el('select', { className: 'editor-select' }) as HTMLSelectElement
+  jingleSelect.append(
+    el('option', { value: 'default' }, ['ジングル: 既定']),
+    el('option', { value: 'on' }, ['ジングル: オン']),
+    el('option', { value: 'off' }, ['ジングル: オフ'])
+  )
+
   toolbar.append(
     playBtn,
     timeLabel,
@@ -78,10 +93,38 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
     addLineBtn,
     tapModeBtn,
     reallocateBtn,
+    countInSelect,
+    jingleSelect,
     el('span', { className: 'editor-toolbar-spacer' }, []),
     el('span', { className: 'mono' }, ['オフセット']),
     offsetLabel
   )
+
+  function triStateToSelectValue(v: boolean | null | undefined): 'default' | 'on' | 'off' {
+    return v === true ? 'on' : v === false ? 'off' : 'default'
+  }
+  function selectValueToTriState(v: string): boolean | null {
+    return v === 'on' ? true : v === 'off' ? false : null
+  }
+  function syncCueSelects(): void {
+    const pb = state().project?.playback
+    countInSelect.value = triStateToSelectValue(pb?.countInEnabled)
+    jingleSelect.value = triStateToSelectValue(pb?.keyJingleEnabled)
+  }
+  countInSelect.addEventListener('change', () => {
+    const s = state()
+    if (!s.project) return
+    ctx.editor.store.setState({
+      project: { ...s.project, playback: { ...s.project.playback, countInEnabled: selectValueToTriState(countInSelect.value) } }
+    })
+  })
+  jingleSelect.addEventListener('change', () => {
+    const s = state()
+    if (!s.project) return
+    ctx.editor.store.setState({
+      project: { ...s.project, playback: { ...s.project.playback, keyJingleEnabled: selectValueToTriState(jingleSelect.value) } }
+    })
+  })
 
   // ---------- タイムライン(ピッチリボン・波形・ガイド・ブロック・境界バー) ----------
   const scrollArea = el('div', { className: 'editor-track-scroll' })
@@ -1071,6 +1114,7 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
     renderBlocks()
     renderBoundary()
     renderSidePanel()
+    syncCueSelects()
   }
   renderAll()
 
@@ -1080,6 +1124,7 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
     renderBlocks()
     renderBoundary()
     renderSidePanel()
+    syncCueSelects()
   })
 
   return {

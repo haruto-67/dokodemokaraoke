@@ -5,19 +5,37 @@
  * 再生に使うAudioContextは`ctx.playback.audioContext`(曲再生と共有)をそのまま渡す想定。
  */
 
-/** カウントダウンの数字が切り替わるたびに鳴らす、メトロノーム的な短いクリック音。 */
-export function playCountInClick(audioContext: AudioContext): void {
-  const now = audioContext.currentTime
+const COUNT_IN_CLICK_COUNT = 4
+const COUNT_IN_CLICK_INTERVAL_SEC = 0.5
+
+/** メトロノーム的な短いクリック音を、指定したAudioContext時刻(絶対値)に1回鳴らす。 */
+function scheduleClick(audioContext: AudioContext, at: number): void {
   const osc = audioContext.createOscillator()
   osc.type = 'square'
   osc.frequency.value = 1500
   const gain = audioContext.createGain()
-  gain.gain.setValueAtTime(0.25, now)
-  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.05)
+  gain.gain.setValueAtTime(0.25, at)
+  gain.gain.exponentialRampToValueAtTime(0.001, at + 0.05)
   osc.connect(gain)
   gain.connect(audioContext.destination)
-  osc.start(now)
-  osc.stop(now + 0.06)
+  osc.start(at)
+  osc.stop(at + 0.06)
+}
+
+/**
+ * 歌い出し直前だけ鳴らす4カウント(§4.12「カウントインに音を追加する」)。
+ * 曲のBPM検出は行わず(解析パイプラインにBPM検出が無いため)、固定間隔で機械的に
+ * 4回鳴らす簡易版。`firstLineStartAtCtxTime`(1行目の歌い出しに対応するAudioContext時刻)を
+ * 起点に、そこへ向けて逆算した4つの時刻にまとめてスケジュールする(数字表示の更新tickとは
+ * 完全に独立させ、間奏カウントダウンでは一切呼ばない。以前は数字が切り替わるたびに
+ * 毎回クリック音を鳴らしていたため、間奏のたびに鳴る・4カウントとして揃っていない
+ * という不具合があった)。
+ */
+export function scheduleCountInClicks(audioContext: AudioContext, firstLineStartAtCtxTime: number): void {
+  for (let i = 0; i < COUNT_IN_CLICK_COUNT; i++) {
+    const at = firstLineStartAtCtxTime - (COUNT_IN_CLICK_COUNT - i) * COUNT_IN_CLICK_INTERVAL_SEC
+    if (at >= audioContext.currentTime) scheduleClick(audioContext, at)
+  }
 }
 
 /** 再生開始時に1回だけ鳴らす、ピアノ風の簡易ジングル(分散和音)。 */

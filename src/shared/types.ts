@@ -80,6 +80,11 @@ export interface DokokaraProject {
     /** キー変更(移調、§4.12)。半音単位、0で原曲キーのまま。テンポは変えずピッチだけシフトする。
      *  曲によって歌いやすいキーが違うためプロジェクト単位で保持する(環境単位のmicLatencyCompensationMs等とは別物)。 */
     keySemitones: number
+    /** 曲ごとの4カウント/キー提示ジングルのオン/オフ。nullはアプリ全体設定(AppSettings.countInEnabled/
+     *  keyJingleEnabled)に従うことを表す(既定)。このフィールド追加前に作成された既存プロジェクトも
+     *  undefinedとして同じ扱いになる(§4.12「曲ごとにオン/オフできるようにする」)。 */
+    countInEnabled: boolean | null
+    keyJingleEnabled: boolean | null
   }
 
   analysis: {
@@ -115,7 +120,9 @@ export function createEmptyProject(name: string): DokokaraProject {
     playback: {
       offsetMs: 0,
       defaultSource: 'playback',
-      keySemitones: 0
+      keySemitones: 0,
+      countInEnabled: null,
+      keyJingleEnabled: null
     },
     analysis: {
       separation: 'melband-roformer',

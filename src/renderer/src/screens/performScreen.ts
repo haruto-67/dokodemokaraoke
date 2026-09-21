@@ -6,7 +6,7 @@ import { scorePerformance, type SungPitchSample } from '@shared/analysis/scoring
 import { computeTokenPitchesMidi } from '@shared/analysis/tokenPitch'
 import { startMicPitchDetection, type MicPitchSession } from '../audio/micPitchInput'
 import { bufferForSource } from '../lib/projectActions'
-import { playCountInClick, playStartJingle } from '../audio/performCues'
+import { scheduleCountInClicks, playStartJingle } from '../audio/performCues'
 
 const INTERLUDE_THRESHOLD_SEC = 4
 const CONTROLS_FADE_MS = 2500
@@ -80,13 +80,30 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
   const keyDownBtn = el('button', { className: 'btn btn-ghost' }, ['キー♭'])
   const keyLabel = el('span', { className: 'mono perform-key-label' }, ['±0'])
   const keyUpBtn = el('button', { className: 'btn btn-ghost' }, ['♯'])
+  // ---------- ガイドボーカル音量(§4.12、設定モーダルの見つけにくさ改善: 本番画面にも直接置く) ----------
+  const guideVocalLabel = el('span', { className: 'mono' }, ['ガイド'])
+  const guideVocalInput = el('input', { type: 'range', min: '0', max: '1', step: '0.05' }) as HTMLInputElement
   const timeLabel = el('span', { className: 'mono perform-time' }, ['0:00.00'])
-  controls.append(homeBtn, backBtn, playBtn, restartBtn, sourceSelect, keyDownBtn, keyLabel, keyUpBtn, fullscreenBtn, timeLabel)
+  controls.append(
+    homeBtn,
+    backBtn,
+    playBtn,
+    restartBtn,
+    sourceSelect,
+    keyDownBtn,
+    keyLabel,
+    keyUpBtn,
+    guideVocalLabel,
+    guideVocalInput,
+    fullscreenBtn,
+    timeLabel
+  )
 
   const offsetIndicator = el('div', { className: 'perform-offset-indicator' })
   const micNotice = el('div', { className: 'perform-mic-notice' })
+  const dragHandle = el('div', { className: 'perform-drag-handle' })
 
-  root.append(progressBar, pitchStripWrap, lyricsArea, countdownEl, controls, offsetIndicator, micNotice)
+  root.append(progressBar, pitchStripWrap, lyricsArea, countdownEl, controls, offsetIndicator, micNotice, dragHandle)
 
   // ---------- 状態ヘルパー ----------
   function state() {
@@ -151,8 +168,21 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
     ctx.playback.setOverlayBuffer(overlayBuffer)
   }
   syncGuideVocalOverlay()
+  guideVocalInput.value = String(ctx.settings.getState().guideVocalVolume)
   ctx.playback.setOverlayVolume(ctx.settings.getState().guideVocalVolume)
-  const unsubGuideVocalVolume = ctx.settings.subscribe((s) => ctx.playback.setOverlayVolume(s.guideVocalVolume))
+  // 本番画面のスライダー操作中に設定モーダル側の値と食い違わないよう、設定側の変化も
+  // 常にスライダーへ反映する(設定モーダルを別ウインドウ等で同時に開くケースは無いが、
+  // 将来的な変更経路の増加に備えて一方向の描画同期にしておく)。
+  const unsubGuideVocalVolume = ctx.settings.subscribe((s) => {
+    ctx.playback.setOverlayVolume(s.guideVocalVolume)
+    if (document.activeElement !== guideVocalInput) guideVocalInput.value = String(s.guideVocalVolume)
+  })
+  guideVocalInput.addEventListener('input', () => {
+    ctx.playback.setOverlayVolume(Number(guideVocalInput.value))
+  })
+  guideVocalInput.addEventListener('change', () => {
+    void window.dokokara.setSettings({ guideVocalVolume: Number(guideVocalInput.value) }).then((updated) => ctx.settings.setState(updated))
+  })
 
   function finishAndShowResult(): void {
     micSession?.stop()
@@ -169,11 +199,21 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
   // ---------- ナビゲーション・再生操作 ----------
   homeBtn.addEventListener('click', () => ctx.navigate('home'))
   backBtn.addEventListener('click', () => ctx.navigate('editor'))
-  // 再生開始時のジングル(§4.12「キー提示」)は、曲の冒頭(位置0)から始める時だけ鳴らす。
-  // 一時停止からの再開のたびに鳴ると煩わしいため。
+  // 再生開始時のジングル(§4.12「キー提示」)・歌い出し前4カウントは、曲の冒頭(位置0)から
+  // 始める時だけ鳴らす。一時停止からの再開のたびに鳴ると煩わしいため。
   function startPlayback(): void {
-    if (ctx.settings.getState().keyJingleEnabled && ctx.playback.getCurrentTime() === 0) {
-      playStartJingle(ctx.playback.audioContext)
+    if (ctx.playback.getCurrentTime() === 0) {
+      const settings = ctx.settings.getState()
+      const projectPlayback = state().project?.playback
+      // 曲ごとのオン/オフ(§4.12編集画面)がnull/未設定ならアプリ全体設定にフォールバックする
+      // (既存プロジェクトのkeySemitonesマイグレーションと同じ考え方)。
+      const keyJingleEnabled = projectPlayback?.keyJingleEnabled ?? settings.keyJingleEnabled
+      const countInEnabled = projectPlayback?.countInEnabled ?? settings.countInEnabled
+      if (keyJingleEnabled) playStartJingle(ctx.playback.audioContext)
+      const firstLine = lines()[0]
+      if (countInEnabled && firstLine) {
+        scheduleCountInClicks(ctx.playback.audioContext, ctx.playback.audioContext.currentTime + firstLine.start)
+      }
     }
     ctx.playback.play()
     playBtn.textContent = '⏸'
@@ -295,11 +335,9 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
   }
 
   // ---------- カウントイン・間奏カウントダウン ----------
-  let lastCountdownValue: string | null = null
   function resetCountdown(): void {
     countdownEl.textContent = ''
     countdownEl.classList.remove('visible')
-    lastCountdownValue = null
   }
   function renderCountdown(t: number): void {
     const all = lines()
@@ -320,20 +358,16 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
     const isIntro = nextIdx === 0
 
     const gap = next.start - prevEnd
-    const shouldCountdown = isIntro ? settings.countInEnabled : gap >= INTERLUDE_THRESHOLD_SEC
+    const countInEnabled = state().project?.playback.countInEnabled ?? settings.countInEnabled
+    const shouldCountdown = isIntro ? countInEnabled : gap >= INTERLUDE_THRESHOLD_SEC
     if (!shouldCountdown) {
       resetCountdown()
       return
     }
     const remain = Math.max(0, next.start - t)
     const value = String(Math.ceil(remain))
-    // 数字が切り替わった瞬間だけクリック音を鳴らす(§4.12「カウントインに音を追加する」)。
-    // 表示自体はcountInEnabledに関わらず更新されるため、音もその挙動に合わせる
-    // (間奏カウントダウンにも同じ音を鳴らす。既存の数字表示と対称にするための判断)。
-    if (value !== lastCountdownValue && ctx.playback.isPlaying()) {
-      playCountInClick(ctx.playback.audioContext)
-    }
-    lastCountdownValue = value
+    // クリック音自体はここでは鳴らさない(startPlayback()で歌い出し直前の4カウントとして
+    // まとめてスケジュール済み)。ここは数字表示の更新のみを担当する。
     countdownEl.textContent = value
     countdownEl.classList.add('visible')
   }

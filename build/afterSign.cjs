@@ -146,14 +146,11 @@ module.exports = async function afterSign(context) {
 
   console.log('[afterSign] 再構築・署名(entitlements付き)の検証に成功しました')
 
-  // 試したが断念: .appバンドルのフォルダ名をafterSignの時点でproductName(日本語)に
+  // 注意: ここ(afterSign、dmg-builderより前)で.appバンドルのフォルダ名をproductName(日本語)に
   // リネームすると、この後に続くelectron-builder自身のDMG生成ステップ(dmg-builder)が
   // 内部的に元のexecutableName由来のパスをまだ参照しており、
-  // `FileNotFoundError: release/mac-arm64/DokokaraKaraoke.app`で失敗することを実機で
-  // 確認した(ビルド全体が止まる致命的な副作用)。そのためリネームはしない。
-  // Finder/Launchpad上のアプリ名がローマ字のままになる問題はdmg.title(electron-builder.yml)
-  // で緩和済み(マウント時のボリューム名・ウィンドウタイトルは日本語になる)が、
-  // /Applicationsへコピーした後の.app自体のファイル名はASCII(DokokaraKaraoke.app)のまま
-  // 残る。Contents/MacOS内の実行ファイル名(ASCII、Apple SiliconでのSIGTRAPクラッシュ
-  // 回避のため必須)とバンドルフォルダ名がelectron-builder内部で連動しているための制約。
+  // `FileNotFoundError: release/mac-arm64/DokokaraKaraoke.app`で失敗する(実機で確認済み)。
+  // そのためここではリネームしない。.appのフォルダ名を日本語にする処理自体は、
+  // dmg-builderが完全に終わった後に走るbuild/afterAllArtifactBuild.cjs(DMGをマウントして
+  // 中の.appをリネームし、DMGごと作り直す)で行う。
 }
