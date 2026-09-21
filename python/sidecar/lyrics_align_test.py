@@ -10,7 +10,13 @@ from pathlib import Path
 
 import numpy as np
 
-from lyrics_align import Wav2Vec2Vocab, align_tokens_to_audio, katakana_to_hiragana, text_to_hiragana_reading
+from lyrics_align import (
+    Wav2Vec2Vocab,
+    _load_wav2vec2_model,
+    align_tokens_to_audio,
+    katakana_to_hiragana,
+    text_to_hiragana_reading,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _WAV2VEC2_MODEL_PATH = _REPO_ROOT / "resources" / "models" / "japanese-wav2vec2-base-rs35kh.safetensors"
@@ -124,6 +130,24 @@ class AlignTokensToAudioCtcTooLongRegressionTest(unittest.TestCase):
 
         self.assertEqual(tokens, [])
         self.assertEqual(confidence, 0.0)
+
+
+@unittest.skipUnless(_WAV2VEC2_MODEL_PATH.exists(), "wav2vec2モデル未取得のためskip(npm run build:modelsで取得)")
+class Wav2Vec2ConfigRegressionTest(unittest.TestCase):
+    """実機で発生したバグの回帰テスト(2026-09-21): `_load_wav2vec2_model()`が`vocab_size`以外
+    HuggingFaceのdataclass既定値(`do_stable_layer_norm=False`)のままWav2Vec2Configを構築して
+    いたため、state_dictのkey名・shapeは完全一致してload_state_dict自体は例外無く成功するに
+    もかかわらず、実際の計算経路(各transformer層内でのLayerNorm適用位置)が学習時と食い違い、
+    出力がほぼ入力に依存しない退化した確率分布(常に`<unk>`支配的)に収束していた。これが
+    「歌詞アライメントが曲冒頭のごく短い区間に全行圧縮される」不具合の真因だった。
+    reazon-research/japanese-wav2vec2-base-rs35kh の実config.jsonを取得して
+    `do_stable_layer_norm=true`と判明し、修正した。
+    """
+
+    def test_config_matches_real_checkpoint(self):
+        model = _load_wav2vec2_model(_WAV2VEC2_MODEL_PATH)
+        self.assertTrue(model.config.do_stable_layer_norm)
+        self.assertEqual(model.config.pad_token_id, 0)
 
 
 if __name__ == "__main__":

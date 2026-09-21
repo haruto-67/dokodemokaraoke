@@ -66,20 +66,15 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
   const offsetLabel = el('span', { className: 'mono editor-offset' }, ['0ms'])
   const reallocateBtn = el('button', { className: 'btn btn-ghost' }, ['この行を再配分'])
 
-  // --- 曲ごとの4カウント/キー提示ジングルのオン/オフ(§4.12) ---
-  // アプリ全体設定(⌘,)は既定値の扱いで、ここでの選択が優先される。「既定」はアプリ全体設定に従う。
-  const countInSelect = el('select', { className: 'editor-select' }) as HTMLSelectElement
-  countInSelect.append(
-    el('option', { value: 'default' }, ['4カウント: 既定']),
-    el('option', { value: 'on' }, ['4カウント: オン']),
-    el('option', { value: 'off' }, ['4カウント: オフ'])
-  )
-  const jingleSelect = el('select', { className: 'editor-select' }) as HTMLSelectElement
-  jingleSelect.append(
-    el('option', { value: 'default' }, ['ジングル: 既定']),
-    el('option', { value: 'on' }, ['ジングル: オン']),
-    el('option', { value: 'off' }, ['ジングル: オフ'])
-  )
+  // --- 曲ごとの4カウント/キー提示音のオン/オフ(§4.12) ---
+  // オン/オフの2値のみ(「既定」という3つ目の選択肢は分かりにくいという指摘を受けて廃止)。
+  // 表示中のチェック状態は常に有効値(project側の値、無ければアプリ全体設定)を反映するが、
+  // 操作すると必ずプロジェクト側に明示的なtrue/falseを書き込む。
+  const cueLabelStyle = { display: 'inline-flex', alignItems: 'center', gap: '4px' } as unknown as CSSStyleDeclaration
+  const countInCheckbox = el('input', { type: 'checkbox' }) as HTMLInputElement
+  const countInLabel = el('label', { className: 'editor-select', style: cueLabelStyle }, [countInCheckbox, '4カウント'])
+  const jingleCheckbox = el('input', { type: 'checkbox' }) as HTMLInputElement
+  const jingleLabel = el('label', { className: 'editor-select', style: cueLabelStyle }, [jingleCheckbox, 'キー提示音'])
 
   toolbar.append(
     playBtn,
@@ -93,36 +88,30 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
     addLineBtn,
     tapModeBtn,
     reallocateBtn,
-    countInSelect,
-    jingleSelect,
+    countInLabel,
+    jingleLabel,
     el('span', { className: 'editor-toolbar-spacer' }, []),
     el('span', { className: 'mono' }, ['オフセット']),
     offsetLabel
   )
 
-  function triStateToSelectValue(v: boolean | null | undefined): 'default' | 'on' | 'off' {
-    return v === true ? 'on' : v === false ? 'off' : 'default'
-  }
-  function selectValueToTriState(v: string): boolean | null {
-    return v === 'on' ? true : v === 'off' ? false : null
-  }
   function syncCueSelects(): void {
     const pb = state().project?.playback
-    countInSelect.value = triStateToSelectValue(pb?.countInEnabled)
-    jingleSelect.value = triStateToSelectValue(pb?.keyJingleEnabled)
+    countInCheckbox.checked = pb?.countInEnabled ?? settings().countInEnabled
+    jingleCheckbox.checked = pb?.keyJingleEnabled ?? settings().keyJingleEnabled
   }
-  countInSelect.addEventListener('change', () => {
+  countInCheckbox.addEventListener('change', () => {
     const s = state()
     if (!s.project) return
     ctx.editor.store.setState({
-      project: { ...s.project, playback: { ...s.project.playback, countInEnabled: selectValueToTriState(countInSelect.value) } }
+      project: { ...s.project, playback: { ...s.project.playback, countInEnabled: countInCheckbox.checked } }
     })
   })
-  jingleSelect.addEventListener('change', () => {
+  jingleCheckbox.addEventListener('change', () => {
     const s = state()
     if (!s.project) return
     ctx.editor.store.setState({
-      project: { ...s.project, playback: { ...s.project.playback, keyJingleEnabled: selectValueToTriState(jingleSelect.value) } }
+      project: { ...s.project, playback: { ...s.project.playback, keyJingleEnabled: jingleCheckbox.checked } }
     })
   })
 

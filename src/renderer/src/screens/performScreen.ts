@@ -6,7 +6,7 @@ import { scorePerformance, type SungPitchSample } from '@shared/analysis/scoring
 import { computeTokenPitchesMidi } from '@shared/analysis/tokenPitch'
 import { startMicPitchDetection, type MicPitchSession } from '../audio/micPitchInput'
 import { bufferForSource } from '../lib/projectActions'
-import { scheduleCountInClicks, playStartJingle } from '../audio/performCues'
+import { scheduleCountInClicks, playKeyTone, COUNT_IN_TOTAL_LEAD_SEC, KEY_TONE_DURATION_SEC } from '../audio/performCues'
 
 const INTERLUDE_THRESHOLD_SEC = 4
 const CONTROLS_FADE_MS = 2500
@@ -115,8 +115,13 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
   function displayOffsetSec(): number {
     return (state().project?.playback.offsetMs ?? 0) / 1000
   }
+  // §4.12 カウントイン/キー提示のプリロール中はPlaybackEngine.getCurrentTime()が負の値
+  // (曲の実際の頭に到達するまでの残り秒数)を返す。ここで0にクランプせずそのまま通すことで、
+  // renderCountdown()の残り秒数計算がプリロール中も自然に減っていき、4カウントの数字表示が
+  // 実際のクリック音とずれずに連動する(クランプすると歌い出しまでの残り秒数が実際より
+  // 短く見えてしまう)。0未満にしたくない表示箇所(進捗バー等)は呼び出し側で個別にクランプする。
   function playheadDisplaySec(): number {
-    return Math.max(0, ctx.playback.getCurrentTime() - displayOffsetSec())
+    return ctx.playback.getCurrentTime() - displayOffsetSec()
   }
   function totalDurationSec(): number {
     return ctx.playback.duration
@@ -209,13 +214,31 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
       // (既存プロジェクトのkeySemitonesマイグレーションと同じ考え方)。
       const keyJingleEnabled = projectPlayback?.keyJingleEnabled ?? settings.keyJingleEnabled
       const countInEnabled = projectPlayback?.countInEnabled ?? settings.countInEnabled
-      if (keyJingleEnabled) playStartJingle(ctx.playback.audioContext)
       const firstLine = lines()[0]
+      const now = ctx.playback.audioContext.currentTime
+      let songStartAt = now
+
       if (countInEnabled && firstLine) {
-        scheduleCountInClicks(ctx.playback.audioContext, ctx.playback.audioContext.currentTime + firstLine.start)
+        // 歌い出しが早い曲(4カウントをフルで鳴らし切るリード時間が無い曲)では、曲の実際の
+        // 再生開始(位置0)そのものを後ろにずらし、必ず4カウントが鳴り終わってから歌い出しが
+        // 来るようにする(見た目上はすぐ再生が始まって見えるが、裏では音源の開始タイミングを
+        // 調整している)。PlaybackEngine.play()のstartAtCtxTimeがこのプリロールを担う。
+        const preRollSec = Math.max(0, COUNT_IN_TOTAL_LEAD_SEC - firstLine.start)
+        songStartAt = now + preRollSec
+        const firstLineStartAtCtxTime = songStartAt + firstLine.start
+        scheduleCountInClicks(ctx.playback.audioContext, firstLineStartAtCtxTime)
+        // キー提示は「4カウントがある場合は4カウントと一緒」に鳴らす(そのための追加の
+        // リード時間は取らない。4カウントの頭に重ねる)。
+        if (keyJingleEnabled) playKeyTone(ctx.playback.audioContext, firstLineStartAtCtxTime - COUNT_IN_TOTAL_LEAD_SEC)
+      } else if (keyJingleEnabled) {
+        // 4カウントが無い場合は、キー提示音1つ分だけ曲の再生開始を遅らせる
+        songStartAt = now + KEY_TONE_DURATION_SEC
+        playKeyTone(ctx.playback.audioContext, now)
       }
+      ctx.playback.play(undefined, songStartAt)
+    } else {
+      ctx.playback.play()
     }
-    ctx.playback.play()
     playBtn.textContent = '⏸'
   }
   function togglePlay(): void {
@@ -456,7 +479,7 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
     const t = playheadDisplaySec()
     timeLabel.textContent = formatTime(t)
     const duration = totalDurationSec()
-    progressFill.style.width = duration > 0 ? `${Math.min(100, (t / duration) * 100)}%` : '0%'
+    progressFill.style.width = duration > 0 ? `${Math.max(0, Math.min(100, (t / duration) * 100))}%` : '0%'
     renderLines()
     renderCountdown(t)
     updatePitchStripScroll(t)

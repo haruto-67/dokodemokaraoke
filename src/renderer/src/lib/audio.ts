@@ -59,6 +59,12 @@ export class PlaybackEngine {
   // shifterを作り直す都合上、これが「キー変更すると曲が途中で終了判定になる」不具合の原因)。
   // stopSourceOnly()でこのガードをfalseにしてから捨てることで、遅延発火を無視できるようにする。
   private shifterEndedGuard: { active: boolean } | null = null
+  // 未来の時刻(startAtCtxTime)から再生を開始する場合(§4.12カウントイン/キー提示のプリロール、
+  // performScreen.ts参照)、PitchShifter経路にはAudioBufferSourceNode.start(when)のような
+  // ネイティブの将来スケジューリングが無いため、connect()自体をsetTimeoutで遅らせて模する。
+  // stopSourceOnly()が先に呼ばれた場合はこのタイマーを確実に解除し、破棄済みshifterが
+  // 遅れてconnectされて音が漏れることを防ぐ。
+  private pendingShifterConnectTimeoutIds: ReturnType<typeof setTimeout>[] = []
 
   constructor() {
     this.audioContext = new AudioContext()
@@ -111,13 +117,15 @@ export class PlaybackEngine {
   /**
    * 指定バッファを、現在の移調設定に応じてAudioBufferSourceNodeかPitchShifterのいずれかで
    * offsetSec位置から再生開始する。onEndedはAudioBufferSourceNode経路でのみ発火する
-   * (メイン音源のみ終了検知が必要で、オーバーレイ側はnullを渡す想定)。
+   * (メイン音源のみ終了検知が必要で、オーバーレイ側はnullを渡す想定)。`startAt`は再生を
+   * 開始するAudioContext時刻(絶対値)。現在時刻以前ならそのまま即座に開始する。
    */
   private startNode(
     buffer: AudioBuffer,
     offsetSec: number,
     destination: GainNode,
-    onEnded: (() => void) | null
+    onEnded: (() => void) | null,
+    startAt: number
   ): { source: AudioBufferSourceNode | null; shifter: PitchShifter | null; endedGuard: { active: boolean } | null } {
     if (this.pitchShiftSemitones !== 0) {
       const endedGuard = onEnded ? { active: true } : null
@@ -128,36 +136,64 @@ export class PlaybackEngine {
       shifter.tempo = 1
       shifter.pitchSemitones = this.pitchShiftSemitones
       shifter.percentagePlayed = buffer.duration > 0 ? (offsetSec / buffer.duration) * 100 : 0
-      shifter.connect(destination)
+      const delayMs = (startAt - this.audioContext.currentTime) * 1000
+      if (delayMs > 0) {
+        const timeoutId = setTimeout(() => {
+          this.pendingShifterConnectTimeoutIds = this.pendingShifterConnectTimeoutIds.filter((id) => id !== timeoutId)
+          shifter.connect(destination)
+        }, delayMs)
+        this.pendingShifterConnectTimeoutIds.push(timeoutId)
+      } else {
+        shifter.connect(destination)
+      }
       return { source: null, shifter, endedGuard }
     }
     const src = this.audioContext.createBufferSource()
     src.buffer = buffer
     src.connect(destination)
-    src.start(0, offsetSec)
+    src.start(Math.max(startAt, this.audioContext.currentTime), offsetSec)
     if (onEnded) src.onended = onEnded
     return { source: src, shifter: null, endedGuard: null }
   }
 
-  play(fromSec?: number): void {
+  /**
+   * `startAtCtxTime`(省略時は現在時刻)から再生を開始する。未来の時刻を指定すると、
+   * その時刻まで無音のまま待ってから再生が始まる(§4.12カウントイン/キー提示のプリロール、
+   * performScreen.tsのstartPlayback()参照)。getCurrentTime()はこの間、負の値
+   * (=「あと何秒で曲の実際の頭に到達するか」)を返す。
+   */
+  play(fromSec?: number, startAtCtxTime?: number): void {
     if (!this.buffer) return
     if (this.audioContext.state === 'suspended') void this.audioContext.resume()
     this.stopSourceOnly()
     const offset = Math.max(0, Math.min(fromSec ?? this.getCurrentTime(), this.buffer.duration))
+    const startAt = Math.max(this.audioContext.currentTime, startAtCtxTime ?? this.audioContext.currentTime)
 
-    const main = this.startNode(this.buffer, offset, this.gainNode, () => {
-      this.playing = false
-      this.endedCallback?.()
-    })
+    const main = this.startNode(
+      this.buffer,
+      offset,
+      this.gainNode,
+      () => {
+        this.playing = false
+        this.endedCallback?.()
+      },
+      startAt
+    )
     this.source = main.source
     this.shifter = main.shifter
     this.shifterEndedGuard = main.endedGuard
-    this.startedAtCtxTime = this.audioContext.currentTime
+    this.startedAtCtxTime = startAt
     this.startOffsetSec = offset
     this.playing = true
 
     if (this.overlayBuffer) {
-      const overlay = this.startNode(this.overlayBuffer, Math.min(offset, this.overlayBuffer.duration), this.overlayGainNode, null)
+      const overlay = this.startNode(
+        this.overlayBuffer,
+        Math.min(offset, this.overlayBuffer.duration),
+        this.overlayGainNode,
+        null,
+        startAt
+      )
       this.overlaySource = overlay.source
       this.overlayShifter = overlay.shifter
     }
@@ -179,6 +215,8 @@ export class PlaybackEngine {
   }
 
   private stopSourceOnly(): void {
+    for (const id of this.pendingShifterConnectTimeoutIds) clearTimeout(id)
+    this.pendingShifterConnectTimeoutIds = []
     if (this.source) {
       this.source.onended = null
       try {

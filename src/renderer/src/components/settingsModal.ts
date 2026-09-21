@@ -87,8 +87,8 @@ export function mountSettingsModal(root: HTMLElement, ctx: AppContext): void {
   countInInput.addEventListener('change', () => void patchSettings({ countInEnabled: countInInput.checked }))
   countInRow.control.appendChild(countInInput)
 
-  // --- キー提示ジングル(§4.12) ---
-  const jingleRow = settingsRow('再生開始時のジングル')
+  // --- キー提示音(§4.12) ---
+  const jingleRow = settingsRow('キー提示音(再生前にピアノの単音を鳴らす)')
   const jingleInput = el('input', { type: 'checkbox' }) as HTMLInputElement
   jingleInput.addEventListener('change', () => void patchSettings({ keyJingleEnabled: jingleInput.checked }))
   jingleRow.control.appendChild(jingleInput)

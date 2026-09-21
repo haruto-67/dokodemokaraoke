@@ -5,8 +5,11 @@
  * 再生に使うAudioContextは`ctx.playback.audioContext`(曲再生と共有)をそのまま渡す想定。
  */
 
-const COUNT_IN_CLICK_COUNT = 4
-const COUNT_IN_CLICK_INTERVAL_SEC = 0.5
+export const COUNT_IN_CLICK_COUNT = 4
+export const COUNT_IN_CLICK_INTERVAL_SEC = 0.5
+/** 4カウント全体を鳴らし切るのに必要なリード時間(秒)。歌い出しがこれより早い曲では、
+ *  曲の実際の再生開始そのものを後ろにずらして必ずフルの4カウントを確保する(performScreen.ts参照)。 */
+export const COUNT_IN_TOTAL_LEAD_SEC = COUNT_IN_CLICK_COUNT * COUNT_IN_CLICK_INTERVAL_SEC
 
 /** メトロノーム的な短いクリック音を、指定したAudioContext時刻(絶対値)に1回鳴らす。 */
 function scheduleClick(audioContext: AudioContext, at: number): void {
@@ -38,22 +41,25 @@ export function scheduleCountInClicks(audioContext: AudioContext, firstLineStart
   }
 }
 
-/** 再生開始時に1回だけ鳴らす、ピアノ風の簡易ジングル(分散和音)。 */
-export function playStartJingle(audioContext: AudioContext): void {
-  const now = audioContext.currentTime
-  const notes = [523.25, 659.25, 783.99, 1046.5] // C5 - E5 - G5 - C6
-  for (const [i, freq] of notes.entries()) {
-    const startAt = now + i * 0.08
-    const osc = audioContext.createOscillator()
-    osc.type = 'triangle'
-    osc.frequency.value = freq
-    const gain = audioContext.createGain()
-    gain.gain.setValueAtTime(0.0001, startAt)
-    gain.gain.exponentialRampToValueAtTime(0.22, startAt + 0.02)
-    gain.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.6)
-    osc.connect(gain)
-    gain.connect(audioContext.destination)
-    osc.start(startAt)
-    osc.stop(startAt + 0.65)
-  }
+/** キー提示音(単音)の長さ(秒)。4カウントが無い曲では、この時間だけ曲の再生開始を遅らせる。 */
+export const KEY_TONE_DURATION_SEC = 1.0
+
+/**
+ * 再生開始前に1回だけ鳴らす、ピアノ風の単音(キー提示)。以前は4音の分散和音(ジングル)
+ * だったが、「ジングルという名前だと何の音か分かりづらい」「間隔が短く基準音として使いにくい」
+ * という指摘を受け、約1秒伸びる単音に変更した。`startAt`(省略時は現在時刻)から開始する。
+ */
+export function playKeyTone(audioContext: AudioContext, startAt?: number): void {
+  const at = startAt ?? audioContext.currentTime
+  const osc = audioContext.createOscillator()
+  osc.type = 'triangle'
+  osc.frequency.value = 523.25 // C5
+  const gain = audioContext.createGain()
+  gain.gain.setValueAtTime(0.0001, at)
+  gain.gain.exponentialRampToValueAtTime(0.26, at + 0.03)
+  gain.gain.exponentialRampToValueAtTime(0.0001, at + KEY_TONE_DURATION_SEC)
+  osc.connect(gain)
+  gain.connect(audioContext.destination)
+  osc.start(at)
+  osc.stop(at + KEY_TONE_DURATION_SEC + 0.05)
 }

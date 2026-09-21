@@ -201,7 +201,19 @@ def _load_wav2vec2_model(model_path: Path):
     from transformers import Wav2Vec2Config, Wav2Vec2ForCTC
 
     state_dict = load_file(str(model_path))
-    config = Wav2Vec2Config(vocab_size=len(state_dict["lm_head.bias"]))
+    # 訂正(2026-09-21実機デバッグで発覚): vocab_size以外は全てHuggingFaceのdataclass既定値
+    # (do_stable_layer_norm=False等)のままconfigを構築していたため、state_dictのkey名・shapeは
+    # 完全一致してload_state_dict自体は例外無く成功するにもかかわらず、実際の計算経路(各
+    # transformer層内でのLayerNormの適用位置: pre-norm/post-norm)がモデルの学習時と異なり、
+    # 出力が入力(実音声・無音・ランダムノイズのいずれでも)にほぼ依存しない退化した確率分布に
+    # 収束してしまっていた(実機検証: 同じ音声区間で全フレームが常に同一の<unk>支配的な分布を
+    # 返し、実際の歌詞内容と無関係に歌詞が曲冒頭の1〜2秒に圧縮される不具合の真因だった)。
+    # reazon-research/japanese-wav2vec2-base-rs35kh の実config.json
+    # (https://huggingface.co/reazon-research/japanese-wav2vec2-base-rs35kh/raw/main/config.json)
+    # を取得して確認したところ do_stable_layer_norm=true であり、HuggingFaceの既定値(False)とは
+    # 異なっていた。これを明示することで、TTS生成の既知テキスト音声に対して実際に対応する
+    # 文字が(不完全ながら)greedy decodeで現れるようになることを実機で確認した。
+    config = Wav2Vec2Config(vocab_size=len(state_dict["lm_head.bias"]), do_stable_layer_norm=True)
     model = Wav2Vec2ForCTC(config)
     model.load_state_dict(state_dict)
     model.eval()
@@ -252,15 +264,18 @@ def align_tokens_to_audio(
         return [], 0.0
 
     targets = torch.tensor([target_ids], dtype=torch.int64)
-    # CTCのblank ID: 訂正(実機で発覚したバグ)。以前はmodel.config.pad_token_idを参照していたが、
-    # _load_wav2vec2_model()はvocab_sizeだけを指定してWav2Vec2Configを新規構築しているため、
-    # pad_token_idは元モデルの実値ではなく単なるHF既定値の0を返していただけだった。
-    # 実際には本文中のwav2vec2_vocab.json(3000エントリ、id 0="<unk>")は"い"等の普通の文字を
-    # 含む頻出IDであり、blank=0のままだとtargetsに0が含まれるケースが頻発し、
-    # torchaudioのforced_alignが`targets Tensor shouldn't contain blank index`で例外を投げていた。
-    # モデル本体の出力次元(vocab_size=3003)はvocab.jsonの3000エントリより3つ多く、
-    # 元トークナイザーが追加した特殊トークン(<s>/</s>/<pad>)の分だと考えられる。<pad>は
-    # 一般的な変換規約通り最後のクラスに割り当てられているとみなし、vocab_size-1をblankとする。
+    # CTCのblank ID: 訂正(2026-09-21、実config.json取得により判明): モデルの実際の学習時blank
+    # (pad_token_id)は0であり、以前ここに書いていた「vocab_size-1が実際のblank」という説明は
+    # 誤りだった(align_lyrics_lines_to_songのblank_id算出、_load_wav2vec2_model()内コメント参照)。
+    # ただし本文中のwav2vec2_vocab.json(3000エントリ、id 0="<unk>")はpyopenjtalk/vocab不一致時の
+    # フォールバックとして歌詞テキストのtargetsにも普通に出現しうるIDであり、torchaudioの
+    # forced_alignは「targetsにblank IDを含んではいけない」という制約を持つため、blank=0のままだと
+    # targetsに0が混入した瞬間に`targets Tensor shouldn't contain blank index`で例外になる
+    # (実機で確認済み)。この関数(1区間ずつのforced_align、現在main.pyからは未使用)は
+    # この制約を回避するため、意図的にモデルが実際には使わない空きクラス(vocab_size-1)を
+    # blankとして扱う。この場合、alignment自体の精度は劣化しうるが、main.pyの現行パイプラインは
+    # align_lyrics_lines_to_song(ctc-segmentation、blank=pad_token_idを正しく使う)を使うため
+    # 実害は無い。
     blank_id = model.config.vocab_size - 1
     alignment, scores = forced_align(log_probs, targets, blank=blank_id)
 
@@ -357,7 +372,13 @@ def align_lyrics_lines_to_song(
         return []
 
     model = _load_wav2vec2_model(model_path)
-    blank_id = model.config.vocab_size - 1  # align_tokens_to_audioと同じ根拠(コメント参照)
+    # 実config.json(reazon-research/japanese-wav2vec2-base-rs35kh)のpad_token_id=0が実際の
+    # 学習時blank(2026-09-21実機デバッグで確認、align_tokens_to_audioの同名コメント参照)。
+    # torchaudio.functional.forced_alignと違い、ctc_segmentationライブラリは「targetsにblank ID
+    # を含んではいけない」という制約を持たない(targetsにid0が混入するケース—pyopenjtalk/vocab
+    # 不一致時の<unk>フォールバック—で実際に例外が発生しないことを実機で確認済み)ため、
+    # ここでは素直に実際のblankをそのまま使う。
+    blank_id = model.config.pad_token_id
 
     lpz = _compute_full_log_probs(model, vocals_audio_16k_mono)
 
