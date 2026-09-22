@@ -1,7 +1,6 @@
 import type { AppContext } from '../appContext'
 import type { ScreenHandle } from '../lib/screen'
 import { el } from '../lib/dom'
-import { scoreForLine } from '../lib/scoreLines'
 
 /**
  * リザルト画面(§3 画面 #5, §4.12.4)。
@@ -12,7 +11,6 @@ export function mountResultScreen(container: HTMLElement, ctx: AppContext): Scre
   container.appendChild(root)
 
   const result = ctx.ui.getState().lastScoreResult
-  const project = ctx.editor.store.getState().project
   const totalScore = Math.round(result?.totalScore ?? 0)
 
   const scoreValue = el('div', { className: 'result-score-value' }, [String(totalScore)])
@@ -20,18 +18,25 @@ export function mountResultScreen(container: HTMLElement, ctx: AppContext): Scre
   const scoreWrap = el('div', { className: 'result-score-wrap' }, [scoreValue, scoreUnit])
   const title = el('h1', { className: 'result-title' }, ['お疲れさまでした'])
 
-  const linesList = el('div', { className: 'result-lines' })
-  if (result && project) {
-    for (const line of project.lyrics) {
-      if (!line.text) continue
-      const lineScore = scoreForLine(line, result.notes)
-      const row = el('div', { className: 'result-line-row' })
-      row.append(
-        el('span', { className: 'result-line-text' }, [line.text]),
-        el('span', { className: 'mono result-line-score' }, [lineScore === null ? '—' : String(Math.round(lineScore))])
-      )
-      linesList.appendChild(row)
-    }
+  const categoryList = el('div', { className: 'result-categories' })
+  const categories = [
+    { label: '音程', value: result?.categories.pitch ?? 0, detail: 'お手本の音程との一致度' },
+    { label: 'リズム', value: result?.categories.rhythm ?? 0, detail: '歌い出しのタイミング' },
+    { label: '発声率', value: result?.categories.voice ?? 0, detail: '歌唱区間で声を検出した割合' }
+  ]
+  for (const category of categories) {
+    const card = el('div', { className: 'result-category-card' })
+    const meter = el('div', { className: 'result-category-meter' })
+    const meterFill = el('div', { className: 'result-category-meter-fill' })
+    meterFill.style.width = `${Math.max(0, Math.min(100, category.value))}%`
+    meter.appendChild(meterFill)
+    card.append(
+      el('span', { className: 'result-category-label' }, [category.label]),
+      el('span', { className: 'result-category-detail' }, [category.detail]),
+      meter,
+      el('span', { className: 'mono result-category-score' }, [String(Math.round(category.value))])
+    )
+    categoryList.appendChild(card)
   }
 
   const backToEditorBtn = el('button', { className: 'btn btn-ghost' }, ['編集画面へ戻る'])
@@ -45,7 +50,7 @@ export function mountResultScreen(container: HTMLElement, ctx: AppContext): Scre
   homeBtn.addEventListener('click', () => ctx.navigate('home'))
   const controls = el('div', { className: 'result-controls' }, [homeBtn, backToEditorBtn, retryBtn])
 
-  root.append(title, scoreWrap, linesList, controls)
+  root.append(title, scoreWrap, categoryList, controls)
 
   return {
     unmount() {

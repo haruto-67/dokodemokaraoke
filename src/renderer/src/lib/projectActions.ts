@@ -166,6 +166,7 @@ export async function saveProject(ctx: AppContext, saveAs: boolean): Promise<boo
 
   const payload = {
     filePath: saveAs ? null : state.filePath,
+    existingFilePath: state.filePath,
     json,
     f0Bin: state.pitchHz ? typedArrayToArrayBuffer(state.pitchHz) : null,
     audio: {
@@ -208,6 +209,7 @@ export async function backupProject(ctx: AppContext): Promise<void> {
   const json = buildSaveJson(state.project)
   const payload = {
     filePath: state.filePath,
+    existingFilePath: state.filePath,
     json,
     f0Bin: state.pitchHz ? typedArrayToArrayBuffer(state.pitchHz) : null,
     audio: {

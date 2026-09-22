@@ -5,7 +5,7 @@ import { decodeAudio } from '../lib/audio'
 import { parseLyricsLines } from '../lib/lyrics'
 import { notifyError, bufferForSource } from '../lib/projectActions'
 import { tokenizeLine } from '@shared/tokenize'
-import { allocateTokenTimings, findPitchChangePoints } from '@shared/analysis/allocate'
+import { allocateTokenTimings, findPitchChangePoints, melodyRangeForLine } from '@shared/analysis/allocate'
 import {
   createEmptyProject,
   DEFAULT_HOP_SEC,
@@ -211,10 +211,16 @@ export function mountAnalyzingScreen(container: HTMLElement, ctx: AppContext): S
       }
       fallbackCursor = end
 
-      const timedTokens = allocateTokenTimings(tokenizeLine(text), start, end, { onsetsSec, pitchChangePoints })
+      const annotatedText = a?.annotatedText ?? text
+      const tokenRange = melodyRangeForLine(start, end, notes)
+      const timedTokens = allocateTokenTimings(tokenizeLine(annotatedText), tokenRange.start, tokenRange.end, {
+        onsetsSec,
+        pitchChangePoints,
+        alignedReadingTokens: a?.tokenTimings
+      })
       return {
         id: generateLineId(),
-        text,
+        text: annotatedText,
         start,
         end,
         tokens: timedTokens.map((t) => ({ text: t.text, ruby: t.ruby, start: t.start, end: t.end, locked: false })),

@@ -54,21 +54,26 @@ function bufferToArrayBuffer(buf: Buffer): ArrayBuffer {
   return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer
 }
 
-async function persist(payload: SaveProjectPayload, filePath: string): Promise<void> {
+export async function persistProjectPayload(payload: SaveProjectPayload, filePath: string): Promise<void> {
   const json = payload.json as DokokaraProject
+  // プロジェクトを開いた後は、renderer側に元の一時ファイルパスは残らない。従来はその状態で
+  // 上書き保存するとZIP内の音源をすべて落としていたため、既存アーカイブから引き継ぐ。
+  const existing = payload.existingFilePath
+    ? await loadDokokaraFile(payload.existingFilePath).catch(() => null)
+    : null
   const analysisAudio = payload.audio.analysis
     ? { path: `audio/vocal${payload.audio.analysis.ext}`, data: await readFile(payload.audio.analysis.sourcePath) }
-    : null
+    : existing?.analysisAudio ?? null
   const playbackAudio = payload.audio.playback
     ? { path: `audio/off${payload.audio.playback.ext}`, data: await readFile(payload.audio.playback.sourcePath) }
-    : null
+    : existing?.playbackAudio ?? null
   const originalAudio = payload.audio.original
     ? { path: `audio/original${payload.audio.original.ext}`, data: await readFile(payload.audio.original.sourcePath) }
-    : null
+    : existing?.originalAudio ?? null
 
   await saveDokokaraFile(filePath, {
     json,
-    f0Bin: payload.f0Bin ? Buffer.from(payload.f0Bin) : null,
+    f0Bin: payload.f0Bin ? Buffer.from(payload.f0Bin) : existing?.f0Bin ?? null,
     analysisAudio,
     playbackAudio,
     originalAudio
@@ -97,7 +102,7 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       const json = payload.json as DokokaraProject
       filePath = await resolveNewProjectPath(json.name || '無題のプロジェクト')
     }
-    await persist(payload, filePath)
+    await persistProjectPayload(payload, filePath)
     return { filePath }
   })
 
@@ -110,14 +115,14 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null): void
       filters: [{ name: 'どこでもカラオケセット プロジェクト', extensions: ['dokokara'] }]
     })
     if (result.canceled || !result.filePath) return null
-    await persist(payload, result.filePath)
+    await persistProjectPayload(payload, result.filePath)
     return { filePath: result.filePath }
   })
 
   ipcMain.handle(IPC.backupProject, async (_e, payload: SaveProjectPayload) => {
     const json = payload.json as DokokaraProject
     const backupPath = await resolveBackupPath(json.name || '無題のプロジェクト')
-    await persist(payload, backupPath)
+    await persistProjectPayload(payload, backupPath)
   })
 
   ipcMain.handle(IPC.duplicateProject, async (_e, filePath: string) => {

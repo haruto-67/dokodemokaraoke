@@ -77,6 +77,20 @@ describe('scorePerformance', () => {
     const result = scorePerformance([], [{ timeSec: 0.5, hz: A4 }])
     expect(result.totalScore).toBe(0)
     expect(result.notes).toEqual([])
+    expect(result.categories).toEqual({ pitch: 0, rhythm: 0, voice: 0 })
+  })
+
+  it('音程・リズム・発声率を項目別に返す', () => {
+    const notes = [note(1, 2)]
+    const sungPitch: SungPitchSample[] = [
+      { timeSec: 1.02, hz: A4 },
+      { timeSec: 1.2, hz: A4 },
+      { timeSec: 1.4, hz: 0 }
+    ]
+    const result = scorePerformance(notes, sungPitch)
+    expect(result.categories.pitch).toBe(100)
+    expect(result.categories.rhythm).toBeCloseTo(92)
+    expect(result.categories.voice).toBeCloseTo(100 * 2 / 3)
   })
 
   it('toleranceSemitonesオプションを変更すると、境界付近のサンプルの判定が変わる', () => {

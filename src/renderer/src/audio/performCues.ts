@@ -11,6 +11,12 @@ export const COUNT_IN_CLICK_INTERVAL_SEC = 0.5
  *  曲の実際の再生開始そのものを後ろにずらして必ずフルの4カウントを確保する(performScreen.ts参照)。 */
 export const COUNT_IN_TOTAL_LEAD_SEC = COUNT_IN_CLICK_COUNT * COUNT_IN_CLICK_INTERVAL_SEC
 
+/** 歌い出しまでの残り秒から、クリックと同期する4・3・2・1の表示値を返す。 */
+export function countInBeatForRemaining(remainingSec: number): number | null {
+  if (remainingSec <= 0 || remainingSec > COUNT_IN_TOTAL_LEAD_SEC) return null
+  return Math.max(1, Math.min(COUNT_IN_CLICK_COUNT, Math.ceil(remainingSec / COUNT_IN_CLICK_INTERVAL_SEC)))
+}
+
 /** メトロノーム的な短いクリック音を、指定したAudioContext時刻(絶対値)に1回鳴らす。 */
 function scheduleClick(audioContext: AudioContext, at: number): void {
   const osc = audioContext.createOscillator()
@@ -41,13 +47,53 @@ export function scheduleCountInClicks(audioContext: AudioContext, firstLineStart
   }
 }
 
-/** キー提示音(単音)の長さ(秒)。4カウントが無い曲では、この時間だけ曲の再生開始を遅らせる。 */
-export const KEY_TONE_DURATION_SEC = 1.0
+/** キー提示音(単音)の長さ(秒)。音程を聞き取れるよう従来の1秒より長くする。 */
+export const KEY_TONE_DURATION_SEC = 2.5
+/** キー提示音の余韻と4カウントの先頭が重ならないための間隔。 */
+export const KEY_TONE_COUNT_GAP_SEC = 0.15
+
+export interface StartCueSchedule {
+  songStartAt: number
+  firstLineStartAt: number | null
+  countInStartAt: number | null
+  keyToneStartAt: number | null
+}
+
+/**
+ * 曲頭のキー提示音と4カウントを、必ず「キー提示音 → 4カウント → 歌い出し」の順に並べる。
+ * イントロが十分長い場合は曲を遅らせず、そのイントロ内に収める。
+ */
+export function computeStartCueSchedule(
+  now: number,
+  firstLineStartSec: number | null,
+  countInEnabled: boolean,
+  keyToneEnabled: boolean
+): StartCueSchedule {
+  const hasCountIn = countInEnabled && firstLineStartSec !== null
+  const cueLeadSec = hasCountIn
+    ? COUNT_IN_TOTAL_LEAD_SEC + (keyToneEnabled ? KEY_TONE_DURATION_SEC + KEY_TONE_COUNT_GAP_SEC : 0)
+    : keyToneEnabled
+      ? KEY_TONE_DURATION_SEC
+      : 0
+  const availableIntroSec = hasCountIn ? Math.max(0, firstLineStartSec) : 0
+  const songStartAt = now + Math.max(0, cueLeadSec - availableIntroSec)
+  const firstLineStartAt = firstLineStartSec === null ? null : songStartAt + firstLineStartSec
+  const countInStartAt = hasCountIn && firstLineStartAt !== null
+    ? firstLineStartAt - COUNT_IN_TOTAL_LEAD_SEC
+    : null
+  const keyToneStartAt = keyToneEnabled
+    ? countInStartAt !== null
+      ? countInStartAt - KEY_TONE_COUNT_GAP_SEC - KEY_TONE_DURATION_SEC
+      : now
+    : null
+
+  return { songStartAt, firstLineStartAt, countInStartAt, keyToneStartAt }
+}
 
 /**
  * 再生開始前に1回だけ鳴らす、ピアノ風の単音(キー提示)。以前は4音の分散和音(ジングル)
  * だったが、「ジングルという名前だと何の音か分かりづらい」「間隔が短く基準音として使いにくい」
- * という指摘を受け、約1秒伸びる単音に変更した。`startAt`(省略時は現在時刻)から開始する。
+ * という指摘を受け、伸びる単音に変更した。`startAt`(省略時は現在時刻)から開始する。
  */
 export function playKeyTone(audioContext: AudioContext, startAt?: number): void {
   const at = startAt ?? audioContext.currentTime

@@ -4,29 +4,26 @@ import { el, clear, formatTime } from '../lib/dom'
 import type { DokokaraLine, DokokaraToken, PlaySource } from '@shared/types'
 import { scorePerformance, type SungPitchSample } from '@shared/analysis/scoring'
 import { computeTokenPitchesMidi } from '@shared/analysis/tokenPitch'
+import { parseRubyLine } from '@shared/ruby'
 import { startMicPitchDetection, type MicPitchSession } from '../audio/micPitchInput'
 import { bufferForSource } from '../lib/projectActions'
-import { scheduleCountInClicks, playKeyTone, COUNT_IN_TOTAL_LEAD_SEC, KEY_TONE_DURATION_SEC } from '../audio/performCues'
+import { scheduleCountInClicks, playKeyTone, computeStartCueSchedule, countInBeatForRemaining } from '../audio/performCues'
 
 const INTERLUDE_THRESHOLD_SEC = 4
 const CONTROLS_FADE_MS = 2500
-const PITCH_STRIP_HEIGHT = 90
+const PITCH_STRIP_HEIGHT = 180
 const PITCH_STRIP_MARKER_FRACTION = 0.2
-const PITCH_STRIP_MIN_HZ = 70
-const PITCH_STRIP_MAX_HZ = 1100
 /** マイク未許可等の通知を表示し続ける時間(ms)。オフセット表示と同じ演出を流用 */
 const MIC_NOTICE_DURATION_MS = 4000
 
-/** MIDIノート番号(小数可)→Hz変換(お手本メロディのノート単位描画に使う) */
-function midiToHz(midi: number): number {
-  return 440 * Math.pow(2, (midi - 69) / 12)
+/** ピッチガイド(参照メロディ・歌唱ピッチ共通)のHz→縦位置変換 */
+function hzToMidi(hz: number): number {
+  return 69 + 12 * Math.log2(hz / 440)
 }
 
-/** ピッチガイド(参照メロディ・歌唱ピッチ共通)のHz→縦位置変換 */
-function yForHz(hz: number): number {
-  const clamped = Math.min(PITCH_STRIP_MAX_HZ, Math.max(PITCH_STRIP_MIN_HZ, hz))
-  const frac =
-    (Math.log2(clamped) - Math.log2(PITCH_STRIP_MIN_HZ)) / (Math.log2(PITCH_STRIP_MAX_HZ) - Math.log2(PITCH_STRIP_MIN_HZ))
+function yForMidi(midi: number, minMidi: number, maxMidi: number): number {
+  const clamped = Math.min(maxMidi, Math.max(minMidi, midi))
+  const frac = (clamped - minMidi) / Math.max(1, maxMidi - minMidi)
   return PITCH_STRIP_HEIGHT - 8 - frac * (PITCH_STRIP_HEIGHT - 16)
 }
 
@@ -214,28 +211,16 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
       // (既存プロジェクトのkeySemitonesマイグレーションと同じ考え方)。
       const keyJingleEnabled = projectPlayback?.keyJingleEnabled ?? settings.keyJingleEnabled
       const countInEnabled = projectPlayback?.countInEnabled ?? settings.countInEnabled
-      const firstLine = lines()[0]
       const now = ctx.playback.audioContext.currentTime
-      let songStartAt = now
-
-      if (countInEnabled && firstLine) {
-        // 歌い出しが早い曲(4カウントをフルで鳴らし切るリード時間が無い曲)では、曲の実際の
-        // 再生開始(位置0)そのものを後ろにずらし、必ず4カウントが鳴り終わってから歌い出しが
-        // 来るようにする(見た目上はすぐ再生が始まって見えるが、裏では音源の開始タイミングを
-        // 調整している)。PlaybackEngine.play()のstartAtCtxTimeがこのプリロールを担う。
-        const preRollSec = Math.max(0, COUNT_IN_TOTAL_LEAD_SEC - firstLine.start)
-        songStartAt = now + preRollSec
-        const firstLineStartAtCtxTime = songStartAt + firstLine.start
-        scheduleCountInClicks(ctx.playback.audioContext, firstLineStartAtCtxTime)
-        // キー提示は「4カウントがある場合は4カウントと一緒」に鳴らす(そのための追加の
-        // リード時間は取らない。4カウントの頭に重ねる)。
-        if (keyJingleEnabled) playKeyTone(ctx.playback.audioContext, firstLineStartAtCtxTime - COUNT_IN_TOTAL_LEAD_SEC)
-      } else if (keyJingleEnabled) {
-        // 4カウントが無い場合は、キー提示音1つ分だけ曲の再生開始を遅らせる
-        songStartAt = now + KEY_TONE_DURATION_SEC
-        playKeyTone(ctx.playback.audioContext, now)
+      const firstLineStartSec = lines()[0]?.start ?? null
+      const cueSchedule = computeStartCueSchedule(now, firstLineStartSec, countInEnabled, keyJingleEnabled)
+      if (cueSchedule.firstLineStartAt !== null && cueSchedule.countInStartAt !== null) {
+        scheduleCountInClicks(ctx.playback.audioContext, cueSchedule.firstLineStartAt)
       }
-      ctx.playback.play(undefined, songStartAt)
+      if (cueSchedule.keyToneStartAt !== null) {
+        playKeyTone(ctx.playback.audioContext, cueSchedule.keyToneStartAt)
+      }
+      ctx.playback.play(undefined, cueSchedule.songStartAt)
     } else {
       ctx.playback.play()
     }
@@ -324,6 +309,18 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
   }
 
   let currentLineId: string | null = 'uninitialized'
+  function renderStaticLine(target: HTMLElement, line: DokokaraLine | null): void {
+    clear(target)
+    if (!line) return
+    for (const segment of parseRubyLine(line.text)) {
+      if (segment.ruby) {
+        target.appendChild(el('ruby', {}, [segment.text, el('rt', {}, [segment.ruby])]))
+      } else {
+        target.appendChild(document.createTextNode(segment.text))
+      }
+    }
+  }
+
   function renderLines(): void {
     const all = lines()
     const t = playheadDisplaySec()
@@ -337,8 +334,8 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
       currentLineId = current?.id ?? null
       clear(currentLineEl)
       if (current) current.tokens.forEach((tk) => currentLineEl.appendChild(buildLineTokenDom(tk)))
-      prevLineEl.textContent = prev?.text ?? ''
-      nextLineEl.textContent = next?.text ?? ''
+      renderStaticLine(prevLineEl, prev)
+      renderStaticLine(nextLineEl, next)
     }
 
     if (current) updateTokenFill(current, t)
@@ -388,7 +385,12 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
       return
     }
     const remain = Math.max(0, next.start - t)
-    const value = String(Math.ceil(remain))
+    const introBeat = isIntro ? countInBeatForRemaining(remain) : null
+    if (isIntro && introBeat === null) {
+      resetCountdown()
+      return
+    }
+    const value = String(isIntro ? introBeat : Math.ceil(remain))
     // クリック音自体はここでは鳴らさない(startPlayback()で歌い出し直前の4カウントとして
     // まとめてスケジュール済み)。ここは数字表示の更新のみを担当する。
     countdownEl.textContent = value
@@ -396,9 +398,12 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
   }
 
   // ---------- ピッチガイド描画(初回のみ全体を構築し、以後はtransformでスクロール) ----------
-  const PPS = 80
+  const PPS = 100
   // ノート間をこの秒数以内なら段差(縦線)で繋ぐ。これを超える間隔は無音区間とみなし空白のままにする。
   const NOTE_CONNECT_THRESHOLD_SEC = 0.3
+  let pitchMinMidi = 48
+  let pitchMaxMidi = 72
+  let sungPitchPath: SVGPathElement | null = null
 
   function renderPitchStrip(): void {
     clear(pitchStripInner)
@@ -409,6 +414,16 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
     if (allTokens.length === 0) return
     const tokenPitchesMidi = computeTokenPitchesMidi(allTokens, notes)
 
+    const plottedPitches = tokenPitchesMidi.filter((midi): midi is number => midi !== null).map((midi) => midi + keySemitones)
+    if (plottedPitches.length > 0) {
+      const detectedMin = Math.min(...plottedPitches)
+      const detectedMax = Math.max(...plottedPitches)
+      const center = (detectedMin + detectedMax) / 2
+      const span = Math.max(14, detectedMax - detectedMin + 4)
+      pitchMinMidi = center - span / 2
+      pitchMaxMidi = center + span / 2
+    }
+
     const width = Math.max(1, totalDurationSec() * PPS)
     pitchStripInner.style.width = `${width}px`
     pitchStripInner.style.height = `${PITCH_STRIP_HEIGHT}px`
@@ -417,6 +432,20 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
     const svg = document.createElementNS(ns, 'svg')
     svg.setAttribute('width', String(width))
     svg.setAttribute('height', String(PITCH_STRIP_HEIGHT))
+
+    // 半音ごとの横線を薄く表示し、音程差を目で追いやすくする。C音だけ少し強調する。
+    for (let midi = Math.ceil(pitchMinMidi); midi <= Math.floor(pitchMaxMidi); midi++) {
+      const grid = document.createElementNS(ns, 'line')
+      const y = yForMidi(midi, pitchMinMidi, pitchMaxMidi)
+      grid.setAttribute('x1', '0')
+      grid.setAttribute('x2', String(width))
+      grid.setAttribute('y1', String(y))
+      grid.setAttribute('y2', String(y))
+      grid.setAttribute('stroke', 'var(--color-text-weakest)')
+      grid.setAttribute('stroke-width', midi % 12 === 0 ? '1' : '0.5')
+      grid.setAttribute('opacity', midi % 12 === 0 ? '0.28' : '0.1')
+      svg.appendChild(grid)
+    }
 
     // お手本メロディを、歌詞トークン(文字/ルビ単位、§4.6.1で既にモーラ重み配分・ルビ対応
     // 済みのtoken.start/endをそのまま使う)単位の水平バーで描画する(DAM等の採点画面のような
@@ -435,7 +464,7 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
       const token = allTokens[i]
       const xStart = token.start * PPS
       const xEnd = token.end * PPS
-      const y = yForHz(midiToHz(midi + keySemitones))
+      const y = yForMidi(midi + keySemitones, pitchMinMidi, pitchMaxMidi)
       if (prevPlotted && token.start - prevPlotted.end <= NOTE_CONNECT_THRESHOLD_SEC) {
         d += `L${xStart.toFixed(1)},${prevPlotted.y.toFixed(1)} L${xStart.toFixed(1)},${y.toFixed(1)} L${xEnd.toFixed(1)},${y.toFixed(1)} `
       } else {
@@ -451,6 +480,15 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
     path.setAttribute('opacity', '0.85')
     path.setAttribute('stroke-linecap', 'round')
     svg.appendChild(path)
+
+    sungPitchPath = document.createElementNS(ns, 'path')
+    sungPitchPath.setAttribute('fill', 'none')
+    sungPitchPath.setAttribute('stroke', 'var(--color-accent-2)')
+    sungPitchPath.setAttribute('stroke-width', '3')
+    sungPitchPath.setAttribute('stroke-linecap', 'round')
+    sungPitchPath.setAttribute('stroke-linejoin', 'round')
+    sungPitchPath.setAttribute('opacity', '0.95')
+    svg.appendChild(sungPitchPath)
     pitchStripInner.appendChild(svg)
   }
   renderPitchStrip()
@@ -459,7 +497,30 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
     const markerX = pitchStripWrap.clientWidth * PITCH_STRIP_MARKER_FRACTION
     pitchStripInner.style.transform = `translateX(${(markerX - t * PPS).toFixed(1)}px)`
     pitchMarker.style.left = `${markerX}px`
+    updateSungPitchTrail(t)
     updateLivePitchDot(markerX)
+  }
+
+  function updateSungPitchTrail(currentTime: number): void {
+    if (!sungPitchPath) return
+    const visiblePastSec = pitchStripWrap.clientWidth * PITCH_STRIP_MARKER_FRACTION / PPS + 1
+    const visibleFutureSec = pitchStripWrap.clientWidth * (1 - PITCH_STRIP_MARKER_FRACTION) / PPS + 1
+    const start = currentTime - visiblePastSec
+    const end = currentTime + visibleFutureSec
+    let d = ''
+    let previousTime: number | null = null
+    for (const sample of sungPitchSamples) {
+      if (sample.timeSec < start || sample.timeSec > end) continue
+      if (sample.hz <= 0 || (previousTime !== null && sample.timeSec - previousTime > 0.15)) {
+        previousTime = null
+        continue
+      }
+      const x = sample.timeSec * PPS
+      const y = yForMidi(hzToMidi(sample.hz), pitchMinMidi, pitchMaxMidi)
+      d += `${previousTime === null ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)} `
+      previousTime = sample.timeSec
+    }
+    sungPitchPath.setAttribute('d', d)
   }
 
   // 採点用: 現在(=pitchMarkerの位置)の歌唱ピッチをお手本メロディに重ねて表示する(§4.12.4)
@@ -470,7 +531,7 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
     }
     livePitchDot.classList.add('visible')
     livePitchDot.style.left = `${markerX}px`
-    livePitchDot.style.top = `${yForHz(liveSungHz)}px`
+    livePitchDot.style.top = `${yForMidi(hzToMidi(liveSungHz), pitchMinMidi, pitchMaxMidi)}px`
   }
 
   // ---------- メインループ ----------

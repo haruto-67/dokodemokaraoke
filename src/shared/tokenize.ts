@@ -63,14 +63,36 @@ function tokenizePlainTextInto(text: string, tokens: Token[]): void {
   }
 }
 
+/** 読みを、拗音だけ直前へ結合したモーラ単位へ分割する。促音・長音・撥音は独立モーラ。 */
+export function splitMoras(reading: string): string[] {
+  const moras: string[] = []
+  for (const ch of reading) {
+    if (SMALL_KANA.has(ch) && moras.length > 0) moras[moras.length - 1] += ch
+    else moras.push(ch)
+  }
+  return moras
+}
+
+function tokenizeRubySegment(text: string, ruby: string): Token[] {
+  const moras = splitMoras(ruby)
+  if (moras.length === 0) return [{ text, ruby }]
+  const baseChars = Array.from(text)
+  return moras.map((mora, index) => ({
+    // ルビの方が長い場合も各モーラを独立したタイミング単位として残す。最後の数トークンは
+    // 本文が空になるが、本番画面ではrubyが表示されるため読み自体は欠落しない。
+    text: index < moras.length - 1 ? (baseChars[index] ?? '') : baseChars.slice(index).join(''),
+    ruby: mora
+  }))
+}
+
 /** 1つの行テキストをルビ記法解決の上、トークン列へ分割する(§4.6.1)。 */
 export function tokenizeLine(text: string): Token[] {
   const segments = parseRubyLine(text)
   const tokens: Token[] = []
   for (const seg of segments) {
     if (seg.ruby) {
-      // ルビ付き漢字はルビの範囲を1トークンとする
-      tokens.push({ text: seg.text, ruby: seg.ruby })
+      // 編集・文字送りとも、漢字の字数ではなく実際の読みのモーラ単位にする。
+      tokens.push(...tokenizeRubySegment(seg.text, seg.ruby))
       continue
     }
     tokenizePlainTextInto(seg.text, tokens)

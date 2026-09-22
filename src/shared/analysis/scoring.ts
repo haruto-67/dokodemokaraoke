@@ -23,6 +23,14 @@ export interface ScoringResult {
   /** 0..100 */
   totalScore: number
   notes: NoteScoreBreakdown[]
+  categories: {
+    /** お手本の音程に収まった割合 */
+    pitch: number
+    /** 各ノート開始付近で発声できたタイミング精度 */
+    rhythm: number
+    /** お手本ノート区間で声が検出された割合 */
+    voice: number
+  }
 }
 
 export interface ScorePerformanceOptions {
@@ -78,10 +86,37 @@ export function scorePerformance(
   })
 
   const totalDuration = notes.reduce((sum, note) => sum + (note.end - note.start), 0)
-  const totalScore =
+  const pitchScore =
     totalDuration > 0
       ? (100 * noteBreakdowns.reduce((sum, b) => sum + b.accuracy * (b.note.end - b.note.start), 0)) / totalDuration
       : 0
 
-  return { totalScore, notes: noteBreakdowns }
+  const weightedRhythm = notes.reduce((sum, note) => {
+    const duration = Math.max(0, note.end - note.start)
+    const nearbyVoiced = sungPitch.filter(
+      (sample) => sample.hz > 0 && sample.timeSec >= note.start - 0.25 && sample.timeSec <= Math.min(note.end, note.start + 0.4)
+    )
+    if (nearbyVoiced.length === 0) return sum
+    const onsetErrorSec = Math.min(...nearbyVoiced.map((sample) => Math.abs(sample.timeSec - note.start)))
+    const accuracy = Math.max(0, 1 - onsetErrorSec / 0.25)
+    return sum + accuracy * duration
+  }, 0)
+  const rhythmScore = totalDuration > 0 ? (100 * weightedRhythm) / totalDuration : 0
+
+  const weightedVoice = notes.reduce((sum, note) => {
+    const duration = Math.max(0, note.end - note.start)
+    const samples = sungPitch.filter((sample) => sample.timeSec >= note.start && sample.timeSec < note.end)
+    const voicedRatio = samples.length > 0 ? samples.filter((sample) => sample.hz > 0).length / samples.length : 0
+    return sum + voicedRatio * duration
+  }, 0)
+  const voiceScore = totalDuration > 0 ? (100 * weightedVoice) / totalDuration : 0
+
+  // 従来の総合点(音程正確率)は互換性のため維持し、詳細を項目別に提示する。
+  const totalScore = pitchScore
+
+  return {
+    totalScore,
+    notes: noteBreakdowns,
+    categories: { pitch: pitchScore, rhythm: rhythmScore, voice: voiceScore }
+  }
 }

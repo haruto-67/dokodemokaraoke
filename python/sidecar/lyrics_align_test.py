@@ -11,6 +11,8 @@ from pathlib import Path
 import numpy as np
 
 from lyrics_align import (
+    _build_aligned_reading_tokens,
+    auto_annotate_ruby,
     Wav2Vec2Vocab,
     _load_wav2vec2_model,
     align_tokens_to_audio,
@@ -35,6 +37,41 @@ class KatakanaToHiraganaTest(unittest.TestCase):
 
     def test_empty_string(self):
         self.assertEqual(katakana_to_hiragana(""), "")
+
+
+class AlignedReadingTokensTest(unittest.TestCase):
+    def test_builds_boundaries_from_neighboring_ctc_centers(self):
+        class FakeVocab:
+            def decode_single(self, token_id):
+                return {1: "きょう", 2: "は", 3: "はれ"}[token_id]
+
+        result = _build_aligned_reading_tokens(
+            [1, 2, 3], np.array([1.5, 2.5, 4.5]), 1.0, 6.0, FakeVocab()
+        )
+        self.assertEqual(result[0], {"reading": "きょう", "start": 1.0, "end": 2.0})
+        self.assertEqual(result[1], {"reading": "は", "start": 2.0, "end": 3.5})
+        self.assertEqual(result[2], {"reading": "はれ", "start": 3.5, "end": 6.0})
+
+    def test_clamps_non_monotonic_centers(self):
+        class FakeVocab:
+            def decode_single(self, token_id):
+                return str(token_id)
+
+        result = _build_aligned_reading_tokens(
+            [1, 2], np.array([4.0, 2.0]), 1.0, 5.0, FakeVocab()
+        )
+        self.assertLessEqual(result[0]["end"], result[1]["start"])
+
+
+class AutoAnnotateRubyTest(unittest.TestCase):
+    def test_adds_ruby_to_kanji_words_and_preserves_kana(self):
+        self.assertEqual(auto_annotate_ruby("今日は晴れ"), "｜今日《きょう》は｜晴れ《はれ》")
+
+    def test_explicit_ruby_is_preserved_instead_of_reestimated(self):
+        self.assertEqual(auto_annotate_ruby("今日(こんにち)は"), "｜今日《こんにち》は")
+
+    def test_spaces_are_not_dropped(self):
+        self.assertEqual(auto_annotate_ruby("今日 は晴れ"), "｜今日《きょう》 は｜晴れ《はれ》")
 
 
 class Wav2Vec2VocabTest(unittest.TestCase):

@@ -44,6 +44,14 @@ class AlignedToken(TypedDict):
     end: float
 
 
+class AlignedReadingToken(TypedDict):
+    """CTCが認識した読みトークンと、曲全体上の時間範囲。"""
+
+    reading: str
+    start: float
+    end: float
+
+
 def katakana_to_hiragana(text: str) -> str:
     """カタカナをひらがなへ変換する(Unicode上0x60の固定オフセット)。長音記号「ー」等は対象外でそのまま残す。"""
     result = []
@@ -156,6 +164,45 @@ def text_to_hiragana_reading(text: str) -> str:
             katakana = pyopenjtalk.g2p(text_part, kana=True)
             parts.append(katakana_to_hiragana(katakana))
     return "".join(parts)
+
+
+def auto_annotate_ruby(text: str) -> str:
+    """漢字を含む形態素へ青空文庫形式のルビを付ける。ユーザー指定ルビは変更しない。"""
+    import pyopenjtalk
+
+    annotated: List[str] = []
+    for text_part, explicit_ruby in _split_ruby_segments(text):
+        if explicit_ruby is not None:
+            annotated.append(f"｜{text_part}《{katakana_to_hiragana(explicit_ruby)}》")
+            continue
+
+        cursor = 0
+        for node in pyopenjtalk.run_frontend(text_part):
+            surface = str(node.get("string", ""))
+            if not surface:
+                continue
+            if surface.isspace():
+                whitespace_start = cursor
+                while cursor < len(text_part) and text_part[cursor].isspace():
+                    cursor += 1
+                annotated.append(text_part[whitespace_start:cursor])
+                continue
+            index = text_part.find(surface, cursor)
+            if index < 0:
+                # OpenJTalk側で表記が正規化され、元文字列へ安全に対応付けられない場合は
+                # 残りをそのまま保持する。誤った範囲へルビを付けるより欠落しない方を優先する。
+                annotated.append(text_part[cursor:])
+                cursor = len(text_part)
+                break
+            annotated.append(text_part[cursor:index])
+            reading = katakana_to_hiragana(str(node.get("read", "")))
+            if any(_is_kanji(ch) for ch in surface) and reading and reading != "*":
+                annotated.append(f"｜{surface}《{reading}》")
+            else:
+                annotated.append(surface)
+            cursor = index + len(surface)
+        annotated.append(text_part[cursor:])
+    return "".join(annotated)
 
 
 class Wav2Vec2Vocab:
@@ -315,9 +362,42 @@ def align_tokens_to_audio(
 
 class AlignedLine(TypedDict):
     text: str
+    annotatedText: str
     start: float
     end: float
     confidence: float
+    tokenTimings: List[AlignedReadingToken]
+
+
+def _build_aligned_reading_tokens(
+    token_ids: List[int],
+    timing_points: np.ndarray,
+    line_start: float,
+    line_end: float,
+    vocab: Wav2Vec2Vocab,
+) -> List[AlignedReadingToken]:
+    """CTCの各ラベル中心時刻から、隣接ラベルとの中点を境界とする読み区間を作る。"""
+    if not token_ids or len(timing_points) != len(token_ids):
+        return []
+
+    centers: List[float] = []
+    previous = line_start
+    for raw in timing_points:
+        center = max(previous, min(line_end, float(raw)))
+        centers.append(center)
+        previous = center
+
+    boundaries = [line_start]
+    boundaries.extend((centers[i - 1] + centers[i]) / 2 for i in range(1, len(centers)))
+    boundaries.append(line_end)
+    return [
+        {
+            "reading": vocab.decode_single(token_id),
+            "start": float(boundaries[i]),
+            "end": float(max(boundaries[i], boundaries[i + 1])),
+        }
+        for i, token_id in enumerate(token_ids)
+    ]
 
 
 def _compute_full_log_probs(model, audio_16k_mono: np.ndarray, chunk_duration_sec: float = 20.0) -> np.ndarray:
@@ -410,10 +490,28 @@ def align_lyrics_lines_to_song(
     segments = ctc_seg.determine_utterance_segments(config, utt_begin_indices, char_probs, timings, lyrics_lines)
 
     result: List[AlignedLine] = []
-    for line_text, (start, end, avg_log_prob) in zip(lyrics_lines, segments):
+    for line_index, (line_text, (start, end, avg_log_prob)) in enumerate(zip(lyrics_lines, segments)):
         # avg_log_probはdetermine_utterance_segments内部でmin_prob=-1e10を「区間なし」の
         # 番兵値として使うため、その場合はexpせず信頼度0にする(exp(-1e10)は数学的には0だが
         # 意図を明示するため分岐する)。
         confidence = float(np.exp(avg_log_prob)) if avg_log_prob > -1e9 else 0.0
-        result.append({"text": line_text, "start": float(start), "end": float(end), "confidence": confidence})
+        ids = token_lists[line_index].tolist()
+        timing_start = utt_begin_indices[line_index] + 1
+        token_timings = _build_aligned_reading_tokens(
+            ids,
+            timings[timing_start : timing_start + len(ids)],
+            float(start),
+            float(end),
+            vocab,
+        )
+        result.append(
+            {
+                "text": line_text,
+                "annotatedText": auto_annotate_ruby(line_text),
+                "start": float(start),
+                "end": float(end),
+                "confidence": confidence,
+                "tokenTimings": token_timings,
+            }
+        )
     return result

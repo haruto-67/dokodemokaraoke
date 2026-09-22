@@ -60,6 +60,8 @@ export interface OpenProjectResult {
 
 export interface SaveProjectPayload {
   filePath: string | null
+  /** 「別名で保存」やバックアップ時に、埋め込み音源を引き継ぐ元のプロジェクト。 */
+  existingFilePath: string | null
   json: unknown
   f0Bin: ArrayBuffer | null
   audio: {

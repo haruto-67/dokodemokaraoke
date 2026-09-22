@@ -24,10 +24,14 @@ export type SidecarRequest =
 /** `analyze`成功時にサイドカーが返す解析結果(python/sidecar/main.pyの`result`と対応)。 */
 export interface AnalyzeSidecarLine {
   text: string
+  /** pyopenjtalkの形態素読みで漢字へ自動ルビを付けた歌詞。明示ルビは常に優先する。 */
+  annotatedText?: string
   start: number
   end: number
   /** ctc-segmentationの平均対数尤度をexpで0..1へ変換した値 */
   confidence: number
+  /** CTCが出した読み単位の実タイミング。表示文字/モーラへの配分に利用する。 */
+  tokenTimings?: Array<{ reading: string; start: number; end: number }>
 }
 
 export interface AnalyzeSidecarResult {

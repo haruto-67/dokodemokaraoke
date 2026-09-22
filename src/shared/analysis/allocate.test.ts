@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { allocateTokenTimings, findPitchChangePoints, type PitchFrame } from './allocate'
+import { allocateTokenTimings, findPitchChangePoints, melodyRangeForLine, type PitchFrame } from './allocate'
 import type { Token } from '../tokenize'
 
 function tok(text: string, ruby: string | null = null): Token {
@@ -69,6 +69,31 @@ describe('allocateTokenTimings', () => {
     const result = allocateTokenTimings([tok('あ')], 2, 5)
     expect(result).toEqual([{ text: 'あ', ruby: null, start: 2, end: 5 }])
   })
+
+  it('CTCの読みタイミングを表示文字の境界へ反映する', () => {
+    const tokens = [tok('歌'), tok('い'), tok('出'), tok('す')]
+    const result = allocateTokenTimings(tokens, 1, 6, {
+      alignedReadingTokens: [
+        { reading: 'うた', start: 1, end: 3.5 },
+        { reading: 'いだす', start: 3.5, end: 6 }
+      ]
+    })
+    // 表示4文字に対する読みは5モーラなので、単純な4等分ではなくCTC区間内を補間する。
+    expect(result[0].end).toBeCloseTo(2.5625)
+    expect(result[1].end).toBeCloseTo(3.9167)
+    expect(result[2].end).toBeCloseTo(4.9583)
+  })
+
+  it('ルビのモーラ数をCTC読みタイミングへの対応付けに使う', () => {
+    const tokens = [tok('今日', 'きょう'), tok('は')]
+    const result = allocateTokenTimings(tokens, 0, 3, {
+      alignedReadingTokens: [
+        { reading: 'きょう', start: 0, end: 2 },
+        { reading: 'わ', start: 2, end: 3 }
+      ]
+    })
+    expect(result[0].end).toBeCloseTo(2)
+  })
 })
 
 describe('findPitchChangePoints', () => {
@@ -99,5 +124,18 @@ describe('findPitchChangePoints', () => {
       { timeSec: 0.2, hz: 440, voiced: true }
     ]
     expect(findPitchChangePoints(frames)).toEqual([])
+  })
+})
+
+describe('melodyRangeForLine', () => {
+  it('フレーズ前後の無音を除き、重なるノートの範囲へ文字配置を絞る', () => {
+    expect(melodyRangeForLine(1, 6, [
+      { start: 1.5, end: 2.5 },
+      { start: 3, end: 5.2 }
+    ])).toEqual({ start: 1.5, end: 5.2 })
+  })
+
+  it('ノートが無ければ行全体を維持する', () => {
+    expect(melodyRangeForLine(1, 6, [])).toEqual({ start: 1, end: 6 })
   })
 })

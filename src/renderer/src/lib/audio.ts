@@ -4,6 +4,12 @@ import { PitchShifter } from 'soundtouchjs'
 // グリッチのリスクが増える。BGM再生用途では音切れの起きにくさを優先しやや大きめにする。
 const PITCH_SHIFTER_BUFFER_SIZE = 4096
 
+/** soundtouchjs の percentagePlayed は名前に反して 0..100 ではなく 0..1 の割合を受け取る。 */
+export function playbackFractionForOffset(offsetSec: number, durationSec: number): number {
+  if (!Number.isFinite(offsetSec) || !Number.isFinite(durationSec) || durationSec <= 0) return 0
+  return Math.max(0, Math.min(1, offsetSec / durationSec))
+}
+
 /** AudioBufferから各チャンネルのPCMデータを取り出す。Workerへtransferする前提でコピーを返す。 */
 export function extractChannelData(buffer: AudioBuffer): { channels: Float32Array[]; sampleRate: number } {
   const channels: Float32Array[] = []
@@ -135,7 +141,7 @@ export class PlaybackEngine {
       })
       shifter.tempo = 1
       shifter.pitchSemitones = this.pitchShiftSemitones
-      shifter.percentagePlayed = buffer.duration > 0 ? (offsetSec / buffer.duration) * 100 : 0
+      shifter.percentagePlayed = playbackFractionForOffset(offsetSec, buffer.duration)
       const delayMs = (startAt - this.audioContext.currentTime) * 1000
       if (delayMs > 0) {
         const timeoutId = setTimeout(() => {

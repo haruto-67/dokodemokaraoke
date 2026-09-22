@@ -1,5 +1,5 @@
-import { readdir, stat, rename, copyFile, mkdir } from 'node:fs/promises'
-import { join, basename, extname } from 'node:path'
+import { readdir, stat, rename, copyFile, mkdir, readFile, writeFile, unlink } from 'node:fs/promises'
+import { join, basename, extname, dirname } from 'node:path'
 import { shell } from 'electron'
 import JSZip from 'jszip'
 import type { ProjectSummary, DokokaraProject } from '@shared/types'
@@ -69,6 +69,23 @@ async function pathExists(p: string): Promise<boolean> {
   }
 }
 
+/** macOSのNFC/NFD差や大文字小文字差があっても、ディレクトリ内の実在パスへ解決する。 */
+export async function resolveExistingProjectPath(filePath: string): Promise<string> {
+  if (await pathExists(filePath)) return filePath
+  const directory = dirname(filePath)
+  const expected = basename(filePath).normalize('NFC').toLocaleLowerCase()
+  const entries = await readdir(directory, { withFileTypes: true }).catch(() => [])
+  const match = entries.find(
+    (entry) => entry.isFile() && entry.name.normalize('NFC').toLocaleLowerCase() === expected
+  )
+  if (!match) throw new Error(`変更元のプロジェクトが見つかりません: ${basename(filePath)}`)
+  return join(directory, match.name)
+}
+
+function sameNormalizedPath(a: string, b: string): boolean {
+  return a.normalize('NFC').toLocaleLowerCase() === b.normalize('NFC').toLocaleLowerCase()
+}
+
 export async function duplicateProjectFile(filePath: string): Promise<string> {
   const settings = await loadSettings()
   const base = basename(filePath, '.dokokara')
@@ -83,20 +100,46 @@ export async function duplicateProjectFile(filePath: string): Promise<string> {
 }
 
 export async function renameProjectFile(filePath: string, newName: string): Promise<string> {
-  const settings = await loadSettings()
+  const sourcePath = await resolveExistingProjectPath(filePath)
   const base = sanitizeFileName(newName)
-  let candidate = join(settings.projectsDir, `${base}.dokokara`)
-  if (candidate !== filePath && (await pathExists(candidate))) {
+  // macOS/APFSではファイル名の濁点表現(NFC/NFD)が見た目と異なることがある。同じ名前を
+  // 入れ直しただけで「名前 2」になるのを防ぎ、現在の実体パスをそのまま使う。
+  const currentBase = basename(sourcePath, '.dokokara')
+  let candidate = currentBase.normalize('NFC').toLocaleLowerCase() === base.normalize('NFC').toLocaleLowerCase()
+    ? sourcePath
+    : join(dirname(sourcePath), `${base}.dokokara`)
+  if (!sameNormalizedPath(candidate, sourcePath) && (await pathExists(candidate))) {
     let i = 2
     while (await pathExists(candidate)) {
-      candidate = join(settings.projectsDir, `${base} ${i}.dokokara`)
+      candidate = join(dirname(sourcePath), `${base} ${i}.dokokara`)
       i++
     }
   }
-  if (candidate !== filePath) {
-    await rename(filePath, candidate)
-  }
+  await rewriteProjectName(sourcePath, candidate, newName.trim() || base)
   return candidate
+}
+
+/** ZIP内の表示名も更新し、書き込み途中に元ファイルを失わないよう一時ファイルから置換する。 */
+export async function rewriteProjectName(sourcePath: string, destinationPath: string, displayName: string): Promise<void> {
+  const zip = await JSZip.loadAsync(await readFile(sourcePath))
+  const projectEntry = zip.file('project.json')
+  if (!projectEntry) throw new Error('project.json が見つかりません')
+  const project = JSON.parse(await projectEntry.async('string')) as DokokaraProject
+  project.name = displayName
+  project.updatedAt = new Date().toISOString()
+  zip.file('project.json', JSON.stringify(project, null, 2))
+
+  await mkdir(dirname(destinationPath), { recursive: true })
+  const tmpPath = `${destinationPath}.tmp-${Date.now()}`
+  try {
+    const output = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
+    await writeFile(tmpPath, output)
+    await rename(tmpPath, destinationPath)
+    if (!sameNormalizedPath(destinationPath, sourcePath)) await unlink(sourcePath)
+  } catch (error) {
+    await unlink(tmpPath).catch(() => undefined)
+    throw error
+  }
 }
 
 /** §4.1.1: 削除時はファイル自体をゴミ箱へ移動する（完全削除はしない） */

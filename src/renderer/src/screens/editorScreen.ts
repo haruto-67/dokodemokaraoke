@@ -6,6 +6,7 @@ import { snapTime, nearestGridTime, SNAP_PRIORITY, type SnapTarget } from '../li
 import { rescaleTokensExcludingLocked, reallocateRespectingLocks } from '../lib/retiming'
 import { buildWaveformPeaks } from '../lib/waveform'
 import { tokenizeLine } from '@shared/tokenize'
+import { parseRubyLine, rubyToPlainText } from '@shared/ruby'
 import { allocateTokenTimings, findPitchChangePoints } from '@shared/analysis/allocate'
 import { DEFAULT_HOP_SEC, type DokokaraLine, type DokokaraToken, type PlaySource } from '@shared/types'
 
@@ -132,7 +133,7 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
     scrollArea.scrollLeft = Math.max(0, x - scrollArea.clientWidth / 2)
   })
 
-  // ---------- サイドパネル(選択行のテキスト編集) ----------
+  // ---------- 下段パネル(選択行のテキスト編集) ----------
   const sidePanel = el('div', { className: 'editor-side-panel panel' })
   const sidePanelEmpty = el('p', { className: 'editor-side-empty' }, ['行を選択するとここで編集できます'])
   const textArea = el('textarea', { className: 'editor-text-input', rows: 3 }) as HTMLTextAreaElement
@@ -301,7 +302,8 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
 
     lines.forEach((line, index) => {
       const selected = s.selection.lineId === line.id
-      const blockEl = el('div', { className: `editor-block${selected ? ' selected' : ''}` }, [line.text || '(空)'])
+      const plainText = rubyToPlainText(parseRubyLine(line.text))
+      const blockEl = el('div', { className: `editor-block${selected ? ' selected' : ''}` }, [plainText || '(空)'])
       const x = xForTime(line.start)
       const w = Math.max(4, xForTime(line.end) - x)
       blockEl.style.left = `${x}px`
@@ -416,19 +418,19 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
       })
     )
     renderBlocks()
-    if (state().selection.lineId === lineId) renderBoundary()
+    renderBoundary()
   }
 
   function shiftTokens(tokens: DokokaraToken[], deltaSec: number): DokokaraToken[] {
     return tokens.map((t) => ({ ...t, start: t.start + deltaSec, end: t.end + deltaSec }))
   }
 
-  // ---------- 文字境界バー(選択行のみ) ----------
+  // ---------- 文字境界バー(全行を常時表示、選択行のみ境界操作を有効化) ----------
   function renderBoundary(): void {
     clear(boundaryLayer)
     const s = state()
-    const line = (s.project?.lyrics ?? []).find((l) => l.id === s.selection.lineId)
-    if (!line) {
+    const lines = s.project?.lyrics ?? []
+    if (lines.length === 0) {
       boundaryLayer.style.display = 'none'
       return
     }
@@ -438,24 +440,39 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
     boundaryLayer.style.height = `${BOUNDARY_HEIGHT}px`
     boundaryLayer.style.left = '0px'
 
-    line.tokens.forEach((token, i) => {
-      const x = xForTime(token.start)
-      const w = Math.max(2, xForTime(token.end) - x)
-      const tokenEl = el('div', { className: `editor-token${token.locked ? ' locked' : ''}` }, [token.text])
-      tokenEl.style.left = `${x}px`
-      tokenEl.style.width = `${w}px`
-      tokenEl.addEventListener('contextmenu', (e) => {
-        e.preventDefault()
-        showTokenMenu(e.clientX, e.clientY, line, i)
-      })
-      boundaryLayer.appendChild(tokenEl)
+    lines.forEach((line) => {
+      const selectedLine = line.id === s.selection.lineId
+      line.tokens.forEach((token, i) => {
+        const x = xForTime(token.start)
+        const w = Math.max(2, xForTime(token.end) - x)
+        const tokenEl = el(
+          'div',
+          { className: `editor-token${token.locked ? ' locked' : ''}${selectedLine ? ' selected-line' : ''}` },
+          [token.ruby ?? token.text]
+        )
+        tokenEl.title = token.ruby ? `${token.text || '（続き）'} / ${token.ruby}` : token.text
+        tokenEl.style.left = `${x}px`
+        tokenEl.style.width = `${w}px`
+        tokenEl.addEventListener('click', (event) => {
+          event.stopPropagation()
+          ctx.editor.store.setState({ selection: { lineId: line.id, tokenIndex: i } })
+          renderBlocks()
+          renderBoundary()
+          renderSidePanel()
+        })
+        tokenEl.addEventListener('contextmenu', (e) => {
+          e.preventDefault()
+          showTokenMenu(e.clientX, e.clientY, line, i)
+        })
+        boundaryLayer.appendChild(tokenEl)
 
-      if (i < line.tokens.length - 1) {
-        const divider = el('div', { className: 'editor-token-divider' })
-        divider.style.left = `${xForTime(token.end)}px`
-        attachDividerDrag(divider, line, i)
-        boundaryLayer.appendChild(divider)
-      }
+        if (selectedLine && i < line.tokens.length - 1) {
+          const divider = el('div', { className: 'editor-token-divider' })
+          divider.style.left = `${xForTime(token.end)}px`
+          attachDividerDrag(divider, line, i)
+          boundaryLayer.appendChild(divider)
+        }
+      })
     })
   }
 
@@ -543,9 +560,41 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
     })
     menu.appendChild(lockItem)
 
+    const restBeforeItem = el('div', { className: 'editor-token-menu-item' }, ['前に0.2秒の休符を追加'])
+    restBeforeItem.addEventListener('click', () => {
+      addRestAroundToken(line.id, tokenIndex, 'before')
+      closeTokenMenu()
+    })
+    const restAfterItem = el('div', { className: 'editor-token-menu-item' }, ['後ろに0.2秒の休符を追加'])
+    restAfterItem.addEventListener('click', () => {
+      addRestAroundToken(line.id, tokenIndex, 'after')
+      closeTokenMenu()
+    })
+    menu.append(restBeforeItem, restAfterItem)
+
     document.body.appendChild(menu)
     openMenu = menu
     window.setTimeout(() => window.addEventListener('pointerdown', closeTokenMenu, { once: true }), 0)
+  }
+
+  /** トークンの端を縮め、隣接トークンとの間(または行端)に発声しない空白を作る。 */
+  function addRestAroundToken(lineId: string, tokenIndex: number, side: 'before' | 'after'): void {
+    ctx.editor.applyAndCommit((lyrics) =>
+      lyrics.map((line) => {
+        if (line.id !== lineId) return line
+        const tokens = line.tokens.map((token, index) => {
+          if (index !== tokenIndex) return token
+          const duration = token.end - token.start
+          const restDuration = Math.min(0.2, Math.max(0, duration - 0.02))
+          if (restDuration <= 0) return token
+          return side === 'before'
+            ? { ...token, start: token.start + restDuration }
+            : { ...token, end: token.end - restDuration }
+        })
+        return { ...line, tokens, confidence: null }
+      })
+    )
+    renderBoundary()
   }
 
   /** トークンを2つに分割する。1文字以上あれば先頭1文字/残りに分け、1文字のみなら時間を等分する(ルビは失われる)。 */

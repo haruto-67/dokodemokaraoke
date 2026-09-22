@@ -73,6 +73,7 @@
 .editor-main {
   flex: 1;
   display: flex;
+  flex-direction: column;
   min-height: 0;
   position: relative;
 }
@@ -199,6 +200,13 @@
   border-color: var(--color-text-weakest);
 }
 
+.editor-token.selected-line {
+  background: rgba(239, 93, 116, 0.3);
+  border-color: var(--color-accent-2);
+  color: var(--color-text);
+  z-index: 1;
+}
+
 .editor-token-divider {
   position: absolute;
   top: 0;
@@ -207,6 +215,7 @@
   height: 32px;
   cursor: ew-resize;
   pointer-events: auto;
+  z-index: 3;
 }
 .editor-token-divider::after {
   content: '';
@@ -251,15 +260,17 @@
 }
 
 .editor-side-panel {
-  width: 320px;
+  width: auto;
+  min-height: 120px;
   flex-shrink: 0;
   padding: 16px;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: flex-start;
   gap: 10px;
   border-radius: 0;
-  border-left: 1px solid var(--color-border);
-  border-top: none;
+  border-left: none;
+  border-top: 1px solid var(--color-border);
   border-right: none;
   border-bottom: none;
 }
@@ -270,7 +281,8 @@
 }
 
 .editor-text-input {
-  min-height: 90px;
+  flex: 1;
+  min-height: 72px;
   resize: vertical;
 }
 

@@ -45,10 +45,13 @@
 
 .perform-pitch-strip {
   position: relative;
-  height: 90px;
+  height: 180px;
   overflow: hidden;
-  margin: 24px 0;
-  opacity: 0.85;
+  margin: 18px 0 24px;
+  opacity: 0.95;
+  border-top: 1px solid rgba(201, 194, 223, 0.12);
+  border-bottom: 1px solid rgba(201, 194, 223, 0.12);
+  background: rgba(37, 28, 64, 0.22);
 }
 .perform-pitch-strip-inner {
   position: absolute;

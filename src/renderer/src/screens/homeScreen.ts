@@ -154,8 +154,12 @@ export function mountHomeScreen(container: HTMLElement, ctx: AppContext): Screen
       e.stopPropagation()
       const name = window.prompt('新しい名前', summary.name)
       if (!name) return
-      await window.dokokara.renameProject(summary.filePath, name)
-      await ctx.refreshHome()
+      try {
+        await window.dokokara.renameProject(summary.filePath, name)
+        await ctx.refreshHome()
+      } catch (error) {
+        window.alert(`名前を変更できませんでした: ${(error as Error).message}`)
+      }
     })
 
     const delBtn = el('button', { className: 'btn btn-danger' }, ['削除'])

@@ -27,13 +27,22 @@ describe('tokenizeLine', () => {
     expect(tokens.map((t) => t.text)).toEqual(['こ', 'ん', 'に', 'ち', 'は'])
   })
 
-  it('ルビ付き漢字はルビの範囲を1トークンとする', () => {
+  it('ルビ付き漢字は読みのモーラ単位へ分割する', () => {
     const tokens = tokenizeLine('今日(きょう)は晴れ')
     expect(tokens).toEqual<Token[]>([
-      { text: '今日', ruby: 'きょう' },
+      { text: '今', ruby: 'きょ' },
+      { text: '日', ruby: 'う' },
       { text: 'は', ruby: null },
       { text: '晴', ruby: null },
       { text: 'れ', ruby: null }
+    ])
+  })
+
+  it('本文よりモーラ数が多いルビも全モーラをタイミング単位として保持する', () => {
+    expect(tokenizeLine('明日(あした)')).toEqual<Token[]>([
+      { text: '明', ruby: 'あ' },
+      { text: '日', ruby: 'し' },
+      { text: '', ruby: 'た' }
     ])
   })
 
