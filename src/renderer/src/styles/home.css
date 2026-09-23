@@ -154,3 +154,42 @@
   padding: 6px 10px;
   font-size: 12px;
 }
+
+/* window.prompt()代替のテキスト入力ダイアログ */
+.prompt-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(10, 7, 20, 0.6);
+  z-index: 200;
+}
+.prompt-dialog-overlay.visible {
+  display: flex;
+}
+
+.prompt-dialog {
+  width: 360px;
+  max-width: calc(100vw - 48px);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.prompt-dialog-title {
+  font-family: var(--font-display);
+  font-size: 16px;
+}
+
+.prompt-dialog-input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.prompt-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

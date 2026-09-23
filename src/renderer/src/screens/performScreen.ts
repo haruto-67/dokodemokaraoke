@@ -6,7 +6,7 @@ import { scorePerformance, type SungPitchSample } from '@shared/analysis/scoring
 import { computeTokenPitchesMidi } from '@shared/analysis/tokenPitch'
 import { parseRubyLine } from '@shared/ruby'
 import { startMicPitchDetection, type MicPitchSession } from '../audio/micPitchInput'
-import { bufferForSource } from '../lib/projectActions'
+import { bufferForSource, confirmDiscardIfDirty } from '../lib/projectActions'
 import { scheduleCountInClicks, playKeyTone, computeStartCueSchedule, countInBeatForRemaining } from '../audio/performCues'
 
 const INTERLUDE_THRESHOLD_SEC = 4
@@ -199,7 +199,11 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
   ctx.playback.onEnded(finishAndShowResult)
 
   // ---------- ナビゲーション・再生操作 ----------
-  homeBtn.addEventListener('click', () => ctx.navigate('home'))
+  homeBtn.addEventListener('click', async () => {
+    if (!(await confirmDiscardIfDirty(ctx))) return
+    ctx.navigate('home')
+    await ctx.refreshHome()
+  })
   backBtn.addEventListener('click', () => ctx.navigate('editor'))
   // 再生開始時のジングル(§4.12「キー提示」)・歌い出し前4カウントは、曲の冒頭(位置0)から
   // 始める時だけ鳴らす。一時停止からの再開のたびに鳴ると煩わしいため。
@@ -291,24 +295,51 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
   }
 
   // ---------- 文字送り(§4.6.6)付きの行DOMを構築 ----------
-  function buildLineTokenDom(token: DokokaraToken): HTMLElement {
+  // tokenize.tsは1トークン=1モーラを保つ(Python自由デコードのモーラ単位タイミング精度を
+  // 活かすため)。そのため「季節」の節(せつ)のように、ルビのモーラ数が本文の文字数より多い
+  // 行では、本文が空('')のトークンが末尾に生まれる。これをそのまま独立した文字送り単位として
+  // 描画すると「本文なし・ルビだけ」が浮いて見えてしまうため、本文が空のトークンは直前の
+  // 表示単位へ視覚的に統合する(タイミングデータ自体はグループ化せず正確なまま保持する)。
+  interface TokenDisplayGroup {
+    text: string
+    ruby: string
+    start: number
+    end: number
+  }
+
+  function groupTokensForDisplay(tokens: DokokaraToken[]): TokenDisplayGroup[] {
+    const groups: TokenDisplayGroup[] = []
+    for (const tk of tokens) {
+      if (tk.text === '' && groups.length > 0) {
+        const g = groups[groups.length - 1]
+        g.ruby += tk.ruby ?? ''
+        g.end = tk.end
+      } else {
+        groups.push({ text: tk.text, ruby: tk.ruby ?? '', start: tk.start, end: tk.end })
+      }
+    }
+    return groups
+  }
+
+  function buildLineTokenDom(group: TokenDisplayGroup): HTMLElement {
     const wrap = el('span', { className: 'perform-token' })
-    if (token.ruby) {
+    if (group.ruby) {
       const rubyWrap = el('span', { className: 'perform-token-ruby-wrap' })
-      const rubyBase = el('span', { className: 'perform-token-ruby-base' }, [token.ruby])
-      const rubyFill = el('span', { className: 'perform-token-ruby-fill' }, [token.ruby])
+      const rubyBase = el('span', { className: 'perform-token-ruby-base' }, [group.ruby])
+      const rubyFill = el('span', { className: 'perform-token-ruby-fill' }, [group.ruby])
       rubyWrap.append(rubyBase, rubyFill)
       wrap.appendChild(rubyWrap)
     }
     const textWrap = el('span', { className: 'perform-token-text-wrap' })
-    const textBase = el('span', { className: 'perform-token-text-base' }, [token.text])
-    const textFill = el('span', { className: 'perform-token-text-fill' }, [token.text])
+    const textBase = el('span', { className: 'perform-token-text-base' }, [group.text])
+    const textFill = el('span', { className: 'perform-token-text-fill' }, [group.text])
     textWrap.append(textBase, textFill)
     wrap.appendChild(textWrap)
     return wrap
   }
 
   let currentLineId: string | null = 'uninitialized'
+  let currentLineGroups: TokenDisplayGroup[] = []
   function renderStaticLine(target: HTMLElement, line: DokokaraLine | null): void {
     clear(target)
     if (!line) return
@@ -333,17 +364,18 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
     if (current?.id !== currentLineId) {
       currentLineId = current?.id ?? null
       clear(currentLineEl)
-      if (current) current.tokens.forEach((tk) => currentLineEl.appendChild(buildLineTokenDom(tk)))
+      currentLineGroups = current ? groupTokensForDisplay(current.tokens) : []
+      currentLineGroups.forEach((g) => currentLineEl.appendChild(buildLineTokenDom(g)))
       renderStaticLine(prevLineEl, prev)
       renderStaticLine(nextLineEl, next)
     }
 
-    if (current) updateTokenFill(current, t)
+    if (current) updateTokenFill(t)
   }
 
-  function updateTokenFill(line: DokokaraLine, t: number): void {
-    line.tokens.forEach((tk, i) => {
-      const progress = tk.end > tk.start ? Math.min(1, Math.max(0, (t - tk.start) / (tk.end - tk.start))) : t >= tk.end ? 1 : 0
+  function updateTokenFill(t: number): void {
+    currentLineGroups.forEach((g, i) => {
+      const progress = g.end > g.start ? Math.min(1, Math.max(0, (t - g.start) / (g.end - g.start))) : t >= g.end ? 1 : 0
       const pct = `${(progress * 100).toFixed(1)}%`
       const tokenEl = currentLineEl.children[i] as HTMLElement | undefined
       if (!tokenEl) return

@@ -3,6 +3,7 @@ import type { ScreenHandle } from '../lib/screen'
 import { el, clear, formatDateTime, formatTime } from '../lib/dom'
 import type { ProjectSummary } from '@shared/types'
 import { openProjectByPath, openProjectByPathForPerform, createNewProjectFlow } from '../lib/projectActions'
+import { showPromptDialog } from '../components/promptDialog'
 
 type SortKey = 'updatedAt' | 'createdAt' | 'name'
 
@@ -152,7 +153,7 @@ export function mountHomeScreen(container: HTMLElement, ctx: AppContext): Screen
     const renameBtn = el('button', { className: 'btn btn-ghost' }, ['リネーム'])
     renameBtn.addEventListener('click', async (e) => {
       e.stopPropagation()
-      const name = window.prompt('新しい名前', summary.name)
+      const name = await showPromptDialog('新しい名前', summary.name)
       if (!name) return
       try {
         await window.dokokara.renameProject(summary.filePath, name)

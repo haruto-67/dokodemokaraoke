@@ -1,6 +1,7 @@
 import type { AppContext } from '../appContext'
 import type { ScreenHandle } from '../lib/screen'
 import { el } from '../lib/dom'
+import { confirmDiscardIfDirty } from '../lib/projectActions'
 
 /**
  * リザルト画面(§3 画面 #5, §4.12.4)。
@@ -47,7 +48,11 @@ export function mountResultScreen(container: HTMLElement, ctx: AppContext): Scre
     ctx.navigate('perform')
   })
   const homeBtn = el('button', { className: 'btn btn-ghost' }, ['ホームへ'])
-  homeBtn.addEventListener('click', () => ctx.navigate('home'))
+  homeBtn.addEventListener('click', async () => {
+    if (!(await confirmDiscardIfDirty(ctx))) return
+    ctx.navigate('home')
+    await ctx.refreshHome()
+  })
   const controls = el('div', { className: 'result-controls' }, [homeBtn, backToEditorBtn, retryBtn])
 
   root.append(title, scoreWrap, categoryList, controls)

@@ -8,19 +8,21 @@ Electronのメインプロセスと stdin/stdout 経由でJSON-RPC風メッセ�
 - STEP2 ボーカル/伴奏分離(Mel-Band RoFormer) -- separation.py
 - STEP3 F0抽出(RMVPE) -- rmvpe_model.py
 - STEP4 ノート化(Basic Pitch連携) -- f0_notes.py
-- STEP5/6/7 歌詞行リストの一括タイミング付け(モーラ読み変換+ctc-segmentation) -- lyrics_align.py
+- STEP5/6/7 歌詞行リストの一括タイミング付け(モーラ読み変換+自由デコード) -- lyrics_align.py
 
 STEP1(音源取得の正規化)はこのサイドカーではなく呼び出し側(src/main/analysisManager.ts、
 同梱ffmpegでWAVへ変換)で行う。source_audio_pathは常に正規化済みWAVである前提でよい。
 
-歌詞タイミング付けは、歌詞行N行を「曲全体のvocals音声」に対して一括で
-アライメントする(ctc-segmentation使用)。旧実装はSilero VADで先にフレーズ
-区間を検出し、歌詞行と時系列の出現順でmin(N,M)対応付けていたが、VADが
-想定と違う個数に区切ると、そこから後ろの行が丸ごとズレる問題があった
-(実機で「音程は正しいのに歌詞が付いていない箇所がある」という形で発現)。
-ctc-segmentationは歌詞行が時系列順に出現するという前提だけで曲全体に
-アライメントできるため、区間数のズレという概念自体が発生しない。
-vad.pyはこの用途では使わなくなったが、ファイル自体は削除せず残している
+歌詞タイミング付けは、`align_lyrics_lines_via_free_decode`(自由デコード+テキストの
+編集距離アライメント)を使う。以前のctc-segmentationによる強制アライメント
+(`align_lyrics_lines_to_song`、関数はテスト用に残置)は、与えられた歌詞全部をどこかに
+配置しなければならない制約のため、実際には無音/伴奏残響の区間にも文字を割り当ててしまい、
+行の開始位置が実際の発音より系統的に早くなる問題があった(2026-09-22実測、手動で
+完璧にタイミング合わせした正解データとの比較で平均0.5秒程度)。自由デコードはモデル自身の
+blank確信度をそのまま無音判定に使えるため、実測で誤差0.1秒未満まで改善することを確認した。
+さらに以前のSilero VAD先行検出+min(N,M)対応付け方式(区間数がズレると後続行が丸ごと
+ズレる問題があった)も、この自由デコード方式では歌詞行が時系列順に出現するという前提だけに
+依存するため発生しない。vad.pyはこの用途では使わなくなったが、ファイル自体は削除せず残している
 (テスト済みで他用途に転用しうるため)。詳細は[[どこカラv3の技術選定]]参照。
 
 標準ライブラリ以外の重い依存(torch等)は `separation`/`rmvpe_model` モジュール内
@@ -84,7 +86,7 @@ def handle_analyze(req: dict) -> None:
     import vad
     from rmvpe_model import RMVPE
     from f0_notes import notes_from_f0
-    from lyrics_align import align_lyrics_lines_to_song
+    from lyrics_align import align_lyrics_lines_via_free_decode
 
     vocal_label = "ボーカル/伴奏分離(Mel-Band RoFormer)"
     pitch_label = "F0抽出・ノート化(RMVPE+Basic Pitch)"
@@ -146,8 +148,11 @@ def handle_analyze(req: dict) -> None:
     # 区間数のズレという概念自体を無くす。詳細は[[どこカラv3の技術選定]]参照。
     _send_progress(req_id, "assign", align_label, 0.0, "running")
     try:
-        aligned_lines = align_lyrics_lines_to_song(
-            lyrics_lines, vocals_audio.astype("float32"), paths.model_path("japanese-wav2vec2-base-rs35kh.safetensors")
+        aligned_lines = align_lyrics_lines_via_free_decode(
+            lyrics_lines,
+            vocals_audio.astype("float32"),
+            paths.model_path("japanese-wav2vec2-base-rs35kh.safetensors"),
+            notes=notes,
         )
     except Exception as exc:  # noqa: BLE001 -- 失敗理由をerrorメッセージとして呼び出し側に伝える境界
         send({"type": "error", "id": req_id, "message": f"歌詞のタイミング付けに失敗しました: {exc}"})

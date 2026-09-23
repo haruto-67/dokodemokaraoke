@@ -46,6 +46,17 @@ describe('tokenizeLine', () => {
     ])
   })
 
+  it('3文字以上で最後にモーラが余る場合も、モーラ単位のタイミング精度を優先する(季節(きせつ))', () => {
+    // 本文なしトークン(ルビ「つ」等)の浮いて見える表示問題はperformScreen.ts側で解決する。
+    // ここでタイミング単位を文字単位にまとめると、Python自由デコードが出すモーラ単位の
+    // 精度をtokenizeLine側で捨ててしまうため、あえて1トークン=1モーラを維持する。
+    expect(tokenizeLine('季節(きせつ)')).toEqual<Token[]>([
+      { text: '季', ruby: 'き' },
+      { text: '節', ruby: 'せ' },
+      { text: '', ruby: 'つ' }
+    ])
+  })
+
   it('英単語は1トークンとする(文字単位に割らない)', () => {
     const tokens = tokenizeLine('Hello World')
     expect(tokens.map((t) => t.text)).toEqual(['Hello ', 'World'])

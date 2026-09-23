@@ -142,6 +142,10 @@ export function createEditorStore() {
   function isDirty(): boolean {
     const p = store.getState().project
     if (!p) return false
+    // 解析直後などファイル未保存(filePath === null)の場合、履歴の基準点は現在の歌詞と
+    // 一致してしまい isDirty が false になる。しかし disk上には何も保存されていないため、
+    // ここでは常にdirty扱いとし、「ホームへ」等での保存確認を必ず出す。
+    if (store.getState().filePath === null) return true
     return history.isDirty(p.lyrics)
   }
 

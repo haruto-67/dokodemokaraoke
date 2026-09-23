@@ -1,4 +1,4 @@
-import { readdir, stat, rename, copyFile, mkdir, readFile, writeFile, unlink } from 'node:fs/promises'
+import { readdir, stat, rename, mkdir, readFile, writeFile, unlink } from 'node:fs/promises'
 import { join, basename, extname, dirname } from 'node:path'
 import { shell } from 'electron'
 import JSZip from 'jszip'
@@ -95,7 +95,9 @@ export async function duplicateProjectFile(filePath: string): Promise<string> {
     candidate = join(settings.projectsDir, `${base} のコピー ${i}.dokokara`)
     i++
   }
-  await copyFile(filePath, candidate)
+  // ファイル名だけでなくZIP内のproject.json.nameも「〇〇 のコピー」に揃える
+  // (ファイル名とアプリ内のセーブデータ名の不一致を防ぐ)。
+  await writeProjectWithName(filePath, candidate, basename(candidate, '.dokokara'))
   return candidate
 }
 
@@ -119,8 +121,8 @@ export async function renameProjectFile(filePath: string, newName: string): Prom
   return candidate
 }
 
-/** ZIP内の表示名も更新し、書き込み途中に元ファイルを失わないよう一時ファイルから置換する。 */
-export async function rewriteProjectName(sourcePath: string, destinationPath: string, displayName: string): Promise<void> {
+/** ZIP内のproject.json.nameを書き換えたコピーをdestinationPathへ書き出す(sourcePathはそのまま残す)。 */
+async function writeProjectWithName(sourcePath: string, destinationPath: string, displayName: string): Promise<void> {
   const zip = await JSZip.loadAsync(await readFile(sourcePath))
   const projectEntry = zip.file('project.json')
   if (!projectEntry) throw new Error('project.json が見つかりません')
@@ -135,11 +137,16 @@ export async function rewriteProjectName(sourcePath: string, destinationPath: st
     const output = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
     await writeFile(tmpPath, output)
     await rename(tmpPath, destinationPath)
-    if (!sameNormalizedPath(destinationPath, sourcePath)) await unlink(sourcePath)
   } catch (error) {
     await unlink(tmpPath).catch(() => undefined)
     throw error
   }
+}
+
+/** ZIP内の表示名も更新し、書き込み途中に元ファイルを失わないよう一時ファイルから置換する。 */
+export async function rewriteProjectName(sourcePath: string, destinationPath: string, displayName: string): Promise<void> {
+  await writeProjectWithName(sourcePath, destinationPath, displayName)
+  if (!sameNormalizedPath(destinationPath, sourcePath)) await unlink(sourcePath)
 }
 
 /** §4.1.1: 削除時はファイル自体をゴミ箱へ移動する（完全削除はしない） */

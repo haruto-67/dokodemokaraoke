@@ -24,12 +24,25 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import List, Tuple, TypedDict
+from typing import Callable, List, Optional, Tuple, TypedDict
 
 import numpy as np
 import torch
 
+from f0_notes import NoteEvent
+
 VOCAB_PATH = Path(__file__).with_name("wav2vec2_vocab.json")
+# 文字境界をノート開始時刻へスナップする際の許容誤差(§4.4.7後処理)。歌は1文字を長く伸ばす・
+# ビブラートがかかるため、CTCが出す確信度ピークだけに基づく中間点は実際の発音開始とズレやすい。
+# 隣接モーラの開始点に誤ってスナップしないよう、日本語の平均的なモーラ長より狭く設定する。
+NOTE_SNAP_TOLERANCE_SEC = 0.12
+# 文字間の自動休符判定(§4.4.7後処理)。自由デコードが検出した文字認識時刻の間隔がこれを
+# 超える場合、機械的な中間点分割ではなく実際に無音(ブレス等)があると判断し、
+# 前後の文字を詰めて隙間(休符)を作る。日本語の1モーラは通常0.1〜0.2秒程度のため、
+# その2倍以上離れていれば明確に休符とみなせる。
+REST_GAP_THRESHOLD_SEC = 0.5
+# 休符を作る際、前後の文字それぞれに残すマージン(発音の余韻・立ち上がり分)
+REST_MARGIN_SEC = 0.1
 UNK_TOKEN = "<unk>"
 
 # Wav2Vec2の畳み込み特徴抽出器の全体ストライド(config既定: 5,2,2,2,2,2,2の積)。
@@ -166,8 +179,34 @@ def text_to_hiragana_reading(text: str) -> str:
     return "".join(parts)
 
 
+_OKURIGANA_CHAR_RE = re.compile(r"[ぁ-ゟー]")
+
+
+def _strip_trailing_okurigana(surface: str, reading: str) -> Tuple[str, str, str]:
+    """形態素のsurface末尾にある送り仮名(ひらがな)を、readingの対応する末尾と
+    1文字ずつ照合しながら切り出す。「捨て(すて)」のように送り仮名にまでルビが
+    振られてしまう問題への対処(漢字部分にのみルビを付けたい)。
+
+    戻り値は(ルビ対象の先頭部分, その読み, 送り仮名部分)。両方の末尾が一致する
+    ひらがなである間だけ切り詰めるため、漢字の直前で必ず止まる。
+    """
+    surface_end = len(surface)
+    reading_end = len(reading)
+    while surface_end > 0 and reading_end > 0:
+        s_ch = surface[surface_end - 1]
+        r_ch = reading[reading_end - 1]
+        if s_ch == r_ch and _OKURIGANA_CHAR_RE.fullmatch(s_ch):
+            surface_end -= 1
+            reading_end -= 1
+            continue
+        break
+    return surface[:surface_end], reading[:reading_end], surface[surface_end:]
+
+
 def auto_annotate_ruby(text: str) -> str:
-    """漢字を含む形態素へ青空文庫形式のルビを付ける。ユーザー指定ルビは変更しない。"""
+    """漢字を含む形態素へ青空文庫形式のルビを付ける。ユーザー指定ルビは変更しない。
+    送り仮名(活用語尾等)にはルビを付けず、漢字部分だけに絞る。
+    """
     import pyopenjtalk
 
     annotated: List[str] = []
@@ -197,7 +236,11 @@ def auto_annotate_ruby(text: str) -> str:
             annotated.append(text_part[cursor:index])
             reading = katakana_to_hiragana(str(node.get("read", "")))
             if any(_is_kanji(ch) for ch in surface) and reading and reading != "*":
-                annotated.append(f"｜{surface}《{reading}》")
+                kanji_part, kanji_reading, okurigana = _strip_trailing_okurigana(surface, reading)
+                if kanji_part and any(_is_kanji(ch) for ch in kanji_part) and kanji_reading:
+                    annotated.append(f"｜{kanji_part}《{kanji_reading}》{okurigana}")
+                else:
+                    annotated.append(surface)
             else:
                 annotated.append(surface)
             cursor = index + len(surface)
@@ -369,27 +412,88 @@ class AlignedLine(TypedDict):
     tokenTimings: List[AlignedReadingToken]
 
 
+def _snap_boundaries_to_notes(
+    boundaries: List[float],
+    notes: Optional[List[NoteEvent]],
+    tolerance_sec: float,
+) -> List[float]:
+    """内部境界(先頭・末尾の行境界を除く)を、近いノート開始時刻へスナップする(§4.4.7後処理)。
+
+    歌詞は基本的に「新しい文字を発音する瞬間 = 新しい音符が始まる瞬間」と一致することが
+    多い(1文字1音符が基本形)という前提を利用する。1つのノート開始点は1つの境界にのみ
+    使う(同じ点へ複数境界が吸着すると境界の順序が壊れるため)。メリスマ(1文字が複数ノート
+    にまたがる)の場合や近くにノートが無い場合は、最近傍ノートが遠すぎてtolerance外になり
+    元のCTC中間点のまま残る、という形で自然にフォールバックする。
+    """
+    if not notes or len(boundaries) <= 2:
+        return boundaries
+
+    note_starts = sorted(n["start"] for n in notes)
+    used_indices: set[int] = set()
+    result = list(boundaries)
+    for i in range(1, len(boundaries) - 1):
+        best_idx: int | None = None
+        best_dist = tolerance_sec
+        for ni, ns in enumerate(note_starts):
+            if ni in used_indices:
+                continue
+            dist = abs(ns - boundaries[i])
+            if dist <= best_dist:
+                best_idx = ni
+                best_dist = dist
+        if best_idx is not None:
+            result[i] = note_starts[best_idx]
+            used_indices.add(best_idx)
+
+    # スナップにより境界の前後関係が崩れないようクランプする
+    for i in range(1, len(result)):
+        if result[i] < result[i - 1]:
+            result[i] = result[i - 1]
+    return result
+
+
+def _boundaries_from_centers(
+    centers: List[float],
+    line_start: float,
+    line_end: float,
+    notes: Optional[List[NoteEvent]] = None,
+    note_snap_tolerance_sec: float = NOTE_SNAP_TOLERANCE_SEC,
+) -> List[float]:
+    """各文字の代表時刻(centers)から、隣接文字との中点を境界とする区間の境界配列を作る。
+    notesを渡した場合、境界をノート開始時刻へスナップする後処理を追加で行う。
+    """
+    if not centers:
+        return [line_start, line_end]
+
+    clamped: List[float] = []
+    previous = line_start
+    for raw in centers:
+        c = max(previous, min(line_end, float(raw)))
+        clamped.append(c)
+        previous = c
+
+    boundaries = [line_start]
+    boundaries.extend((clamped[i - 1] + clamped[i]) / 2 for i in range(1, len(clamped)))
+    boundaries.append(line_end)
+    return _snap_boundaries_to_notes(boundaries, notes, note_snap_tolerance_sec)
+
+
 def _build_aligned_reading_tokens(
     token_ids: List[int],
     timing_points: np.ndarray,
     line_start: float,
     line_end: float,
     vocab: Wav2Vec2Vocab,
+    notes: Optional[List[NoteEvent]] = None,
+    note_snap_tolerance_sec: float = NOTE_SNAP_TOLERANCE_SEC,
 ) -> List[AlignedReadingToken]:
-    """CTCの各ラベル中心時刻から、隣接ラベルとの中点を境界とする読み区間を作る。"""
+    """CTCの各ラベル中心時刻から、隣接ラベルとの中点を境界とする読み区間を作る。
+    notesを渡した場合、境界をノート開始時刻へスナップする後処理を追加で行う。
+    """
     if not token_ids or len(timing_points) != len(token_ids):
         return []
 
-    centers: List[float] = []
-    previous = line_start
-    for raw in timing_points:
-        center = max(previous, min(line_end, float(raw)))
-        centers.append(center)
-        previous = center
-
-    boundaries = [line_start]
-    boundaries.extend((centers[i - 1] + centers[i]) / 2 for i in range(1, len(centers)))
-    boundaries.append(line_end)
+    boundaries = _boundaries_from_centers(list(timing_points), line_start, line_end, notes, note_snap_tolerance_sec)
     return [
         {
             "reading": vocab.decode_single(token_id),
@@ -398,6 +502,278 @@ def _build_aligned_reading_tokens(
         }
         for i, token_id in enumerate(token_ids)
     ]
+
+
+def _apply_auto_rests(
+    starts: List[float],
+    ends: List[float],
+    centers: List[float],
+    matched: List[bool],
+    gap_threshold_sec: float,
+    margin_sec: float,
+) -> None:
+    """文字間の認識時刻の間隔(centers)が閾値を超える箇所に、休符(無音の隙間)を自動挿入する。
+
+    強制アライメント由来の中間点分割は常にトークンが隙間なく連続するため、実際に
+    ブレス等の無音がある箇所も機械的に埋めてしまう。centersの間隔が広ければ実際に
+    無音である可能性が高いという前提で、前後の文字をそれぞれmargin_secだけ残して
+    詰める(starts/endsをin-placeで書き換える)。
+
+    両側の文字が実際に自由デコードとマッチした場合のみ判定する。どちらかが認識ミスで
+    前後から線形補間された文字の場合、その間隔は「実際の無音」ではなく単なる補間の
+    副産物である可能性が高く、誤って休符を作ってしまうため対象から除く。
+    """
+    for i in range(1, len(centers)):
+        if not (matched[i - 1] and matched[i]):
+            continue
+        gap = centers[i] - centers[i - 1]
+        if gap <= gap_threshold_sec:
+            continue
+        candidate_end = centers[i - 1] + margin_sec
+        candidate_start = centers[i] - margin_sec
+        if candidate_end < ends[i - 1]:
+            ends[i - 1] = candidate_end
+        if candidate_start > starts[i]:
+            starts[i] = candidate_start
+
+
+def _build_reading_tokens_from_chars(
+    readings: List[str],
+    centers: List[float],
+    line_start: float,
+    line_end: float,
+    notes: Optional[List[NoteEvent]] = None,
+    note_snap_tolerance_sec: float = NOTE_SNAP_TOLERANCE_SEC,
+    matched: Optional[List[bool]] = None,
+    rest_gap_threshold_sec: float = REST_GAP_THRESHOLD_SEC,
+    rest_margin_sec: float = REST_MARGIN_SEC,
+) -> List[AlignedReadingToken]:
+    """1文字ずつの読みと代表時刻(centers)から読み区間を作る(自由デコード方式用)。
+    文字間の間隔が大きい箇所には自動で休符(隙間)を挟む(matched未指定時は全文字を対象とする)。
+    """
+    if not readings or len(readings) != len(centers):
+        return []
+
+    boundaries = _boundaries_from_centers(centers, line_start, line_end, notes, note_snap_tolerance_sec)
+    starts = list(boundaries[:-1])
+    ends = list(boundaries[1:])
+    effective_matched = matched if matched is not None else [True] * len(centers)
+    _apply_auto_rests(starts, ends, centers, effective_matched, rest_gap_threshold_sec, rest_margin_sec)
+
+    return [
+        {"reading": ch, "start": float(starts[i]), "end": float(max(starts[i], ends[i]))}
+        for i, ch in enumerate(readings)
+    ]
+
+
+def _subword_to_reading(sub: str, cache: dict[str, str]) -> str:
+    """デコード語彙の1単位(「季節」等、漢字混じりのことがある)をひらがな読みへ変換する。
+
+    自由デコードの語彙は3000種のうち8割超が漢字を含むサブワード単位であり(reazon-research
+    版wav2vec2は書き言葉の正書法をそのまま出力するモデルのため)、歌詞側のreading(ひらがな、
+    text_to_hiragana_readingで生成)とは同じ文字列比較では一致しない。text_to_hiragana_reading
+    と同じpyopenjtalk経由の変換をここでも通すことで、比較可能な表現へ揃える。
+    文脈のない単語単体でのg2pは読み間違いもあり得るが(例:「節」単体は「ふし」、
+    「季節」の中でなら「せつ」)、比較すらできない状態よりは改善する。
+    """
+    if sub in cache:
+        return cache[sub]
+    plain = sub.lstrip("▁")
+    if not plain or plain == UNK_TOKEN:
+        cache[sub] = ""
+        return ""
+    try:
+        import pyopenjtalk
+
+        reading = katakana_to_hiragana(pyopenjtalk.g2p(plain, kana=True))
+    except Exception:
+        reading = plain
+    cache[sub] = reading
+    return reading
+
+
+def _default_subword_to_reading() -> Callable[[str], str]:
+    cache: dict[str, str] = {}
+    return lambda sub: _subword_to_reading(sub, cache)
+
+
+def _greedy_decode_chars(
+    lpz: np.ndarray,
+    vocab: Wav2Vec2Vocab,
+    blank_id: int,
+    frame_sec: float,
+    to_reading: Optional[Callable[[str], str]] = None,
+) -> Tuple[List[str], List[float], List[bool]]:
+    """各フレームのargmaxからCTC標準の重複除去・blank除去を行い、ひらがな読みの1文字ずつに
+    展開した(文字, その文字を含む単位が検出されたフレームの時刻, 時刻アンカーとして
+    信頼できるか)のリストを返す(自由デコード、§4.4.7新方式)。
+
+    強制アライメント(align_lyrics_lines_to_song)と違い、与えられたテキストを必ず
+    どこかに配置する制約が無いため、モデル自身のblank確信度がそのまま無音判定に使われる。
+
+    語彙の1単位が複数文字(例:「いない」「もう」)のことがあり、CTCは1フレームでまとめて
+    そのまとまりを検出するため、単位内の全文字が同じフレーム時刻を持つ。この時刻はその単位
+    全体が「検出された瞬間」であって各文字の発音開始ではないため、単位内でどの文字が
+    その時刻に対応するかは実際には分からない。3文字分「い」「な」「い」が同時刻を持つと、
+    後段の中点計算で文字幅が0になったり隣が肩代わりしたりする不具合が生じていた
+    (2026-09-23実測、いないいないばあで確認)。ここでは単位内の最後の文字だけを
+    信頼できる時刻アンカーとし、それより前の文字は「認識に失敗した」場合と同様に扱って
+    前後のアンカーから補間させる(補間側の精度は_sequence_align_reading_to_hypothesisの
+    ノートスナップ処理で追加補正する)。
+
+    to_readingは語彙の1単位(漢字混じりのことがある)をひらがな読みへ変換する関数。
+    省略時はpyopenjtalk経由の実変換(_subword_to_reading)を使う。テストでは実際の
+    形態素解析に依存させないよう、決定的な差し替え関数を渡せる。
+    """
+    resolve_reading = to_reading if to_reading is not None else _default_subword_to_reading()
+    argmax_ids = lpz.argmax(axis=1)
+    chars: List[str] = []
+    times: List[float] = []
+    is_anchor: List[bool] = []
+    prev_id: Optional[int] = None
+    for i, token_id in enumerate(argmax_ids):
+        tid = int(token_id)
+        if tid == blank_id:
+            prev_id = None
+            continue
+        if tid == prev_id:
+            continue
+        prev_id = tid
+        t = i * frame_sec
+        reading = resolve_reading(vocab.decode_single(tid))
+        for k, ch in enumerate(reading):
+            chars.append(ch)
+            times.append(t)
+            is_anchor.append(k == len(reading) - 1)
+    return chars, times, is_anchor
+
+
+def _insert_note_subanchors(matched_time: List[Optional[float]], notes: Optional[List[NoteEvent]]) -> None:
+    """ASRと一致せず補間予定になっている連続区間へ、その区間内にある未使用のノート開始時刻を
+    疑似アンカーとして均等に挿入する(in-place)。1音符1文字が基本という前提で、直線補間だけでは
+    表現できない「伸ばす音」「連続する同じ発音」の不均等な間隔をノートの実測値で補う。
+
+    区間内の文字数よりノート数が少ない場合は間引いて割り当て、余った文字は挿入後の
+    アンカー同士の間でこれまで通り直線補間される(呼び出し側の補間ループに委ねる)。
+    曲の先頭・末尾で片側にしかアンカーが無い区間はノート割り当てを保留する
+    (音符の対応範囲が不明瞭になり誤爆しやすいため)。
+    """
+    if not notes:
+        return
+    note_starts = sorted(n["start"] for n in notes)
+    used = [False] * len(note_starts)
+    n = len(matched_time)
+    i = 0
+    while i < n:
+        if matched_time[i] is not None:
+            i += 1
+            continue
+        gap_start = i
+        while i < n and matched_time[i] is None:
+            i += 1
+        gap_end = i  # exclusive
+        if gap_start == 0 or gap_end == n:
+            continue  # 曲頭・曲末は前後どちらかのアンカーが無く範囲が定まらない
+        prev_t = matched_time[gap_start - 1]
+        next_t = matched_time[gap_end]
+        candidates = [
+            ci for ci, ns in enumerate(note_starts) if not used[ci] and prev_t <= ns <= next_t  # type: ignore[operator]
+        ]
+        gap_len = gap_end - gap_start
+        k = len(candidates)
+        picked = min(k, gap_len)
+        for j in range(picked):
+            # 候補がgap内の文字数より多い場合、先頭から詰めて選ぶと区間の前半に偏るため、
+            # 候補全体から均等な間隔で選び直す(区間をなるべく均等にカバーする)。
+            ci = (j * (k - 1)) // (picked - 1) if picked > 1 else 0
+            note_idx = candidates[ci]
+            used[note_idx] = True
+            char_pos = gap_start + (j * gap_len) // picked
+            matched_time[char_pos] = note_starts[note_idx]
+
+
+def _sequence_align_reading_to_hypothesis(
+    reading: str,
+    hyp_chars: List[str],
+    hyp_times: List[float],
+    hyp_anchor: Optional[List[bool]] = None,
+    notes: Optional[List[NoteEvent]] = None,
+) -> Tuple[List[float], List[bool]]:
+    """歌詞読み全体(reading)と自由デコード仮説(hyp_chars)を編集距離DPで対応付け、
+    reading各文字の時刻(一致箇所はhypの時刻、それ以外は前後の一致点から線形補間)を返す。
+
+    hyp_anchorを渡した場合、hyp_chars[j]の内容が一致してもhyp_anchor[j]がFalseな箇所
+    (複数文字単位の末尾以外)は時刻アンカーとして採用しない(_greedy_decode_chars参照)。
+
+    2つ目の戻り値は各文字が実際にhypの信頼できるアンカーとマッチしたか(True)/補間か(False)
+    のフラグで、行のconfidence算出に使う。歌唱に対する認識精度は完璧ではない(認識ミス・脱落
+    がある)ため、一致しない箇所は前後の一致点から時刻を補間するという割り切りで対処する
+    (要件定義書v3 §4.4.7の「完全自動を目指さず手修正前提」の方針と整合)。notesを渡した場合、
+    補間区間には可能な限りノート開始時刻を優先的に割り当てる(_insert_note_subanchors)。
+    """
+    n, m = len(reading), len(hyp_chars)
+    if n == 0:
+        return [], []
+    if m == 0:
+        return [0.0] * n, [False] * n
+
+    dp = np.zeros((n + 1, m + 1), dtype=np.int32)
+    dp[:, 0] = np.arange(n + 1)
+    dp[0, :] = np.arange(m + 1)
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            cost_sub = 0 if reading[i - 1] == hyp_chars[j - 1] else 1
+            dp[i, j] = min(
+                dp[i - 1, j - 1] + cost_sub,
+                dp[i - 1, j] + 1,
+                dp[i, j - 1] + 1,
+            )
+
+    matched_time: List[Optional[float]] = [None] * n
+    i, j = n, m
+    while i > 0 and j > 0:
+        cost_sub = 0 if reading[i - 1] == hyp_chars[j - 1] else 1
+        if dp[i, j] == dp[i - 1, j - 1] + cost_sub:
+            is_anchor = hyp_anchor[j - 1] if hyp_anchor is not None else True
+            if cost_sub == 0 and is_anchor:
+                matched_time[i - 1] = hyp_times[j - 1]
+            i -= 1
+            j -= 1
+        elif dp[i, j] == dp[i - 1, j] + 1:
+            i -= 1
+        else:
+            j -= 1
+
+    matched_flags = [t is not None for t in matched_time]
+
+    _insert_note_subanchors(matched_time, notes)
+
+    times: List[float] = [0.0] * n
+    for idx, t in enumerate(matched_time):
+        if t is not None:
+            times[idx] = t
+
+    idx = 0
+    while idx < n:
+        if matched_time[idx] is not None:
+            idx += 1
+            continue
+        prev_idx = idx - 1
+        while prev_idx >= 0 and matched_time[prev_idx] is None:
+            prev_idx -= 1
+        next_idx = idx + 1
+        while next_idx < n and matched_time[next_idx] is None:
+            next_idx += 1
+        prev_t = times[prev_idx] if prev_idx >= 0 else 0.0
+        next_t = times[next_idx] if next_idx < n else prev_t
+        prev_pos = prev_idx if prev_idx >= 0 else -1
+        next_pos = next_idx if next_idx < n else n
+        span = next_pos - prev_pos
+        frac = (idx - prev_pos) / span if span > 0 else 0.0
+        times[idx] = prev_t + (next_t - prev_t) * frac
+        idx += 1
+
+    return times, matched_flags
 
 
 def _compute_full_log_probs(model, audio_16k_mono: np.ndarray, chunk_duration_sec: float = 20.0) -> np.ndarray:
@@ -429,6 +805,7 @@ def align_lyrics_lines_to_song(
     vocals_audio_16k_mono: np.ndarray,
     model_path: Path,
     vocab: "Wav2Vec2Vocab | None" = None,
+    notes: Optional[List[NoteEvent]] = None,
 ) -> List[AlignedLine]:
     """歌詞行のリスト全体を、曲全体のvocals音声に一括でアライメントする(要件定義書v3 §4.4.7)。
 
@@ -497,12 +874,15 @@ def align_lyrics_lines_to_song(
         confidence = float(np.exp(avg_log_prob)) if avg_log_prob > -1e9 else 0.0
         ids = token_lists[line_index].tolist()
         timing_start = utt_begin_indices[line_index] + 1
+        # この行の区間と重ならないノートは無関係(別の行・間奏のノートへ誤ってスナップしない)
+        line_notes = [n for n in (notes or []) if n["end"] >= start and n["start"] <= end]
         token_timings = _build_aligned_reading_tokens(
             ids,
             timings[timing_start : timing_start + len(ids)],
             float(start),
             float(end),
             vocab,
+            notes=line_notes,
         )
         result.append(
             {
@@ -514,4 +894,104 @@ def align_lyrics_lines_to_song(
                 "tokenTimings": token_timings,
             }
         )
+    return result
+
+
+def align_lyrics_lines_via_free_decode(
+    lyrics_lines: List[str],
+    vocals_audio_16k_mono: np.ndarray,
+    model_path: Path,
+    vocab: "Wav2Vec2Vocab | None" = None,
+    notes: Optional[List[NoteEvent]] = None,
+) -> List[AlignedLine]:
+    """歌詞行のリスト全体を、自由デコード+テキストアライメント方式でタイミング付けする
+    (要件定義書v3 §4.4.7、align_lyrics_lines_to_songのctc-segmentation強制アライメント
+    方式からの置き換え、2026-09-22実測検証に基づく判断)。
+
+    強制アライメント方式は「与えられた歌詞全部をこの区間のどこかに配置しなければならない」
+    という制約を持つため、モデルが実際には無音/伴奏残響と判断している箇所にも文字を
+    割り当ててしまい、行の開始位置が実際の発音より系統的に早くなる問題があった
+    (実測: 手動で完璧にタイミング合わせした正解データと比較して平均0.5秒程度、
+    ctc_segmentationライブラリ内蔵の0.5秒安全マージンを除去しても解消せず、
+    むしろ悪化するケースがあったため、マージンの問題ではなくモデルが実際に無音区間に
+    誤って高い確信度を出していることを実験で確認した)。
+
+    自由デコード(貪欲CTCデコード、"聞こえた通り"を出力させる)はモデル自身のblank確信度が
+    そのまま使われるため無音を無音のまま扱え、実測で誤差0.1秒未満まで改善することを
+    複数箇所で確認した。歌唱に対する認識精度自体は完璧ではない(認識ミス・脱落がある)ため、
+    デコード結果と既知の歌詞を編集距離ベースのシーケンスアライメントですり合わせ、
+    一致しない箇所は前後の一致点から線形補間する。
+
+    align_lyrics_lines_to_song(ctc-segmentation版)は、wav2vec2モデル読み込み・blank ID・
+    CTC長さ制約まわりの回帰テストとして引き続き価値があるため削除せず残している。
+    """
+    if vocab is None:
+        vocab = Wav2Vec2Vocab()
+    if not lyrics_lines:
+        return []
+
+    model = _load_wav2vec2_model(model_path)
+    blank_id = model.config.pad_token_id
+    frame_sec = WAV2VEC2_STRIDE_SAMPLES / WAV2VEC2_SAMPLE_RATE
+
+    lpz = _compute_full_log_probs(model, vocals_audio_16k_mono)
+    hyp_chars, hyp_times, hyp_anchor = _greedy_decode_chars(lpz, vocab, blank_id, frame_sec)
+
+    readings = [text_to_hiragana_reading(line) for line in lyrics_lines]
+    full_reading = "".join(readings)
+    times, matched_flags = _sequence_align_reading_to_hypothesis(
+        full_reading, hyp_chars, hyp_times, hyp_anchor, notes
+    )
+
+    duration_sec = len(vocals_audio_16k_mono) / WAV2VEC2_SAMPLE_RATE
+
+    result: List[AlignedLine] = []
+    offset = 0
+    for line_text, reading in zip(lyrics_lines, readings):
+        line_len = len(reading)
+        annotated = auto_annotate_ruby(line_text)
+        if line_len == 0:
+            fallback_t = times[offset] if offset < len(times) else 0.0
+            result.append(
+                {
+                    "text": line_text,
+                    "annotatedText": annotated,
+                    "start": float(fallback_t),
+                    "end": float(fallback_t),
+                    "confidence": 0.0,
+                    "tokenTimings": [],
+                }
+            )
+            continue
+
+        line_centers = times[offset : offset + line_len]
+        line_matched = matched_flags[offset : offset + line_len]
+        next_offset = offset + line_len
+
+        # 行の開始はその行最初の文字の認識時刻をそのまま使う(前の行との中間を取ると
+        # 実測でむしろ精度が落ちることを確認済み。認識モデルが検出した瞬間そのものの方が
+        # 信頼できるため)。終了は次の行の最初の文字との中間点(無音側のマージンを持たせる)。
+        line_start = line_centers[0]
+        next_start = times[next_offset] if next_offset < len(times) else duration_sec
+        line_end = max(line_start, (line_centers[-1] + next_start) / 2)
+
+        line_notes = [n for n in (notes or []) if n["end"] >= line_start and n["start"] <= line_end]
+        token_timings = _build_reading_tokens_from_chars(
+            list(reading), line_centers, line_start, line_end, notes=line_notes, matched=line_matched
+        )
+
+        confidence = sum(line_matched) / line_len
+
+        result.append(
+            {
+                "text": line_text,
+                "annotatedText": annotated,
+                "start": float(line_start),
+                "end": float(line_end),
+                "confidence": float(confidence),
+                "tokenTimings": token_timings,
+            }
+        )
+        offset = next_offset
+
     return result

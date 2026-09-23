@@ -139,8 +139,12 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
   const textArea = el('textarea', { className: 'editor-text-input', rows: 3 }) as HTMLTextAreaElement
   const lineTimeRow = el('div', { className: 'editor-line-time-row mono' })
   const lineConfidenceRow = el('div', { className: 'editor-line-confidence-row mono' })
-  sidePanel.append(sidePanelEmpty, textArea, lineTimeRow, lineConfidenceRow)
+  const tokenEditHint = el('p', { className: 'editor-token-edit-hint' }, [
+    '文字境界バーの区切り線をドラッグしてタイミング調整。行頭・行末の太い線は最初/最後の文字だけを個別調整。文字を右クリックすると分割・結合・ロック・休符の追加ができます。'
+  ])
+  sidePanel.append(sidePanelEmpty, textArea, lineTimeRow, lineConfidenceRow, tokenEditHint)
   textArea.style.display = 'none'
+  tokenEditHint.style.display = 'none'
 
   root.append(header, toolbar, el('div', { className: 'editor-main' }, [scrollArea, playheadIndicator, sidePanel]))
 
@@ -440,7 +444,7 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
     boundaryLayer.style.height = `${BOUNDARY_HEIGHT}px`
     boundaryLayer.style.left = '0px'
 
-    lines.forEach((line) => {
+    lines.forEach((line, lineIndex) => {
       const selectedLine = line.id === s.selection.lineId
       line.tokens.forEach((token, i) => {
         const x = xForTime(token.start)
@@ -473,6 +477,80 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
           boundaryLayer.appendChild(divider)
         }
       })
+
+      // 行頭・行末のハンドル(§4.7.3): 最初/最後の文字だけの開始・終了時刻を、
+      // 行全体をリスケールせずに個別調整できるようにする(ブロック端ハンドルは全トークン比例伸縮のため別物)。
+      if (selectedLine && line.tokens.length > 0) {
+        const startHandle = el('div', { className: 'editor-token-divider editor-line-edge-handle' })
+        startHandle.style.left = `${xForTime(line.tokens[0].start)}px`
+        attachLineEdgeDrag(startHandle, line, lineIndex, lines, 'start')
+        boundaryLayer.appendChild(startHandle)
+
+        const endHandle = el('div', { className: 'editor-token-divider editor-line-edge-handle' })
+        endHandle.style.left = `${xForTime(line.tokens[line.tokens.length - 1].end)}px`
+        attachLineEdgeDrag(endHandle, line, lineIndex, lines, 'end')
+        boundaryLayer.appendChild(endHandle)
+      }
+    })
+  }
+
+  /** 行頭(最初のトークンのstart)・行末(最後のトークンのend)の個別ドラッグ。行のstart/endも追従させる。 */
+  function attachLineEdgeDrag(
+    handle: HTMLElement,
+    line: DokokaraLine,
+    lineIndex: number,
+    allLines: DokokaraLine[],
+    edge: 'start' | 'end'
+  ): void {
+    handle.addEventListener('pointerdown', (e) => {
+      e.stopPropagation()
+      ctx.editor.beginChange()
+      isDragging = true
+      const startClientX = e.clientX
+      const origBoundary = edge === 'start' ? line.start : line.end
+      const prevLine = allLines[lineIndex - 1] ?? null
+      const nextLine = allLines[lineIndex + 1] ?? null
+      const staticTargets = buildSnapTargets(lineIndex, allLines)
+
+      const onMove = (ev: PointerEvent): void => {
+        const deltaSec = (ev.clientX - startClientX) / pps()
+        let newBoundary = snapCandidate(origBoundary + deltaSec, staticTargets, ev.altKey)
+
+        if (edge === 'start') {
+          const minStart = prevLine ? prevLine.end : 0
+          const maxStart = line.tokens[0].end - 0.01
+          newBoundary = Math.max(minStart, Math.min(newBoundary, maxStart))
+        } else {
+          const lastIndex = line.tokens.length - 1
+          const minEnd = line.tokens[lastIndex].start + 0.01
+          const maxEnd = nextLine ? nextLine.start : Infinity
+          newBoundary = Math.min(maxEnd, Math.max(newBoundary, minEnd))
+        }
+
+        ctx.editor.applyTransient((lyrics) =>
+          lyrics.map((l) => {
+            if (l.id !== line.id) return l
+            const tokens = l.tokens.map((t, i) => {
+              if (edge === 'start' && i === 0) return { ...t, start: newBoundary }
+              if (edge === 'end' && i === l.tokens.length - 1) return { ...t, end: newBoundary }
+              return t
+            })
+            return edge === 'start' ? { ...l, start: newBoundary, tokens } : { ...l, end: newBoundary, tokens }
+          })
+        )
+        renderBoundary()
+        renderBlocks()
+      }
+      const onUp = (): void => {
+        window.removeEventListener('pointermove', onMove)
+        window.removeEventListener('pointerup', onUp)
+        ctx.editor.commitChange()
+        isDragging = false
+        dragCleanup = null
+      }
+      window.addEventListener('pointermove', onMove)
+      window.addEventListener('pointerup', onUp)
+      dragCleanup = onUp
     })
   }
 
@@ -668,12 +746,14 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
     if (!line) {
       sidePanelEmpty.style.display = 'block'
       textArea.style.display = 'none'
+      tokenEditHint.style.display = 'none'
       lineTimeRow.textContent = ''
       lineConfidenceRow.textContent = ''
       return
     }
     sidePanelEmpty.style.display = 'none'
     textArea.style.display = 'block'
+    tokenEditHint.style.display = 'block'
     if (document.activeElement !== textArea) textArea.value = line.text
     lineTimeRow.textContent = `${formatTime(line.start)} 〜 ${formatTime(line.end)}`
     lineConfidenceRow.textContent =
