@@ -50,11 +50,13 @@ export class PlaybackEngine {
   private overlayBuffer: AudioBuffer | null = null
 
   // キー変更(移調、§4.12)。0の間は通常のAudioBufferSourceNode経路(音質劣化・CPU負荷が無い)を
-  // 使い、0以外の時だけPitchShifter(soundtouchjs)経路に切り替える。tempoは常に1に固定して
-  // テンポは変えずピッチだけシフトする。tempo=1である限り、実時間と処理済み音声の長さが
-  // 1:1で一致するため、getCurrentTime()の時刻計算(audioContext.currentTimeベース)は
-  // 経路によらずそのまま使い回せる(PitchShifter自身のtimePlayedには依存しない)。
+  // 使い、0以外の時だけPitchShifter(soundtouchjs)経路に切り替える。tempoは再生速度(rate、既定1)で、
+  // 実時間×rateが処理済み音声の曲中位置に一致するため、getCurrentTime()の時刻計算
+  // (audioContext.currentTimeベース)は経路によらずそのまま使い回せる(PitchShifter自身のtimePlayedには依存しない)。
   private pitchShiftSemitones = 0
+  // 再生速度(編集画面で低速再生しながらタイミングを合わせる用途)。1以外の時もPitchShifter経路を使い、
+  // tempoだけを変えて音程は保つ。経過時間はaudioContext時間×rateで曲中の位置に換算する。
+  private rate = 1
   private shifter: PitchShifter | null = null
   private overlayShifter: PitchShifter | null = null
   // soundtouchjsのPitchShifterは、コンストラクタに渡したonEndコールバックを内部の
@@ -120,6 +122,20 @@ export class PlaybackEngine {
     return this.pitchShiftSemitones
   }
 
+  /** 再生速度(1=等速)を設定する。再生中なら同じ位置から新しい速度で再生し直す。 */
+  setPlaybackRate(rate: number): void {
+    const wasPlaying = this.playing
+    const t = this.getCurrentTime()
+    this.stopSourceOnly()
+    this.rate = rate
+    this.startOffsetSec = t
+    if (wasPlaying) this.play(t)
+  }
+
+  getPlaybackRate(): number {
+    return this.rate
+  }
+
   /**
    * 指定バッファを、現在の移調設定に応じてAudioBufferSourceNodeかPitchShifterのいずれかで
    * offsetSec位置から再生開始する。onEndedはAudioBufferSourceNode経路でのみ発火する
@@ -133,13 +149,13 @@ export class PlaybackEngine {
     onEnded: (() => void) | null,
     startAt: number
   ): { source: AudioBufferSourceNode | null; shifter: PitchShifter | null; endedGuard: { active: boolean } | null } {
-    if (this.pitchShiftSemitones !== 0) {
+    if (this.pitchShiftSemitones !== 0 || this.rate !== 1) {
       const endedGuard = onEnded ? { active: true } : null
       const shifter = new PitchShifter(this.audioContext, buffer, PITCH_SHIFTER_BUFFER_SIZE, () => {
         if (endedGuard && !endedGuard.active) return
         onEnded?.()
       })
-      shifter.tempo = 1
+      shifter.tempo = this.rate
       shifter.pitchSemitones = this.pitchShiftSemitones
       shifter.percentagePlayed = playbackFractionForOffset(offsetSec, buffer.duration)
       const delayMs = (startAt - this.audioContext.currentTime) * 1000
@@ -258,7 +274,7 @@ export class PlaybackEngine {
 
   getCurrentTime(): number {
     if (this.playing) {
-      return this.startOffsetSec + (this.audioContext.currentTime - this.startedAtCtxTime)
+      return this.startOffsetSec + (this.audioContext.currentTime - this.startedAtCtxTime) * this.rate
     }
     return this.startOffsetSec
   }

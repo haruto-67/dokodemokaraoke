@@ -1,4 +1,5 @@
 // project.json スキーマ（要件定義書 §7.2）に対応する型定義
+import type { ShortcutOverrides } from './keybindings'
 
 export interface DokokaraToken {
   text: string
@@ -100,8 +101,18 @@ export interface DokokaraProject {
 
   lyrics: DokokaraLine[]
 
+  /** 曲のテンポ(リズムスナップ用)。bpmと1拍目の時刻から拍グリッドを算出する。
+   *  この項目が無い既存プロジェクト・未設定はundefined/null(編集画面でBPM推定または手入力する)。 */
+  rhythm?: DokokaraRhythm | null
+
   // ホーム画面カードでの波形サムネイル表示用（軽量ダウンサンプル配列、0..1）
   waveformThumb?: number[]
+}
+
+export interface DokokaraRhythm {
+  bpm: number
+  /** 基準となる拍(1拍目)の時刻(秒)。この時刻から60/bpm秒ごとに拍が並ぶ */
+  firstBeatSec: number
 }
 
 export function createEmptyProject(name: string): DokokaraProject {
@@ -157,6 +168,8 @@ export interface AppSettings {
   /** 入出力遅延補正(§4.12.2)。playback.offsetMs(曲ごとの字幕表示調整)とは別物で、
    *  環境(スピーカー/マイクの組み合わせ)ごとにキャリブレーションした値をアプリ設定として保持する。 */
   micLatencyCompensationMs: number
+  /** 編集画面のショートカットキー。既定から変更したアクションだけを保持する(keybindings.ts参照) */
+  shortcuts: ShortcutOverrides
 }
 
 export const DEFAULT_APP_SETTINGS: AppSettings = {
@@ -171,7 +184,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   keyJingleEnabled: true,
   guideVocalVolume: 0,
   micDeviceId: null,
-  micLatencyCompensationMs: 0
+  micLatencyCompensationMs: 0,
+  shortcuts: {}
 }
 
 // ホーム画面カード用の軽量メタデータ

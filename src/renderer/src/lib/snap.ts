@@ -2,16 +2,18 @@
 
 export interface SnapTarget {
   time: number
-  /** 数値が小さいほど優先度が高い(1: プレイヘッド 〜 5: グリッド) */
+  /** 数値が小さいほど優先度が高い(1: プレイヘッド 〜 6: グリッド) */
   priority: number
 }
 
 export const SNAP_PRIORITY = {
   playhead: 1,
   adjacentBlockEdge: 2,
-  phraseBoundary: 3,
-  onset: 4,
-  grid: 5
+  // リズムスナップ(拍グリッド)。オンにしている時は歌詞を拍に乗せたい意図なので、解析由来の候補より優先する
+  beatGrid: 3,
+  phraseBoundary: 4,
+  onset: 5,
+  grid: 6
 } as const
 
 /** 0.1秒グリッド上でcandidateTimeに最も近い時刻を返す */

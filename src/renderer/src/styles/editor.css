@@ -34,14 +34,43 @@
 .editor-toolbar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 24px;
+  gap: 6px 10px;
+  padding: 8px 16px;
   border-bottom: 1px solid var(--color-border);
   flex-wrap: wrap;
 }
 
+/* 機能ごとのまとまり。まとまり同士は縦線で区切る */
+.editor-toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 10px;
+  border-right: 1px solid var(--color-border);
+}
+.editor-toolbar-group:last-of-type {
+  border-right: none;
+}
+
+.editor-toolbar .editor-select.active {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.editor-bpm-input {
+  width: 76px;
+  padding: 5px 6px;
+  font-size: 12px;
+}
+
+.editor-offset-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .editor-toolbar .btn {
-  padding: 6px 10px;
+  padding: 6px 8px;
   font-size: 12px;
 }
 
@@ -193,6 +222,8 @@
   justify-content: center;
   overflow: hidden;
   pointer-events: auto;
+  cursor: grab;
+  user-select: none;
 }
 
 .editor-token.locked {
@@ -225,7 +256,11 @@
   top: 0;
   bottom: 0;
   background: var(--color-accent-2);
-  opacity: 0.6;
+  opacity: 0.25;
+}
+.editor-token-divider:hover::after,
+.editor-token-divider.selected-line::after {
+  opacity: 0.7;
 }
 
 /* 行頭・行末ハンドル: 通常の文字境界と区別できるよう色を変える */
@@ -265,32 +300,84 @@
   background: rgba(242, 183, 5, 0.12);
   color: var(--color-accent);
 }
+.editor-token-menu-item.disabled {
+  color: var(--color-text-weakest);
+  cursor: default;
+}
+.editor-token-menu-item.disabled:hover {
+  background: none;
+  color: var(--color-text-weakest);
+}
+.editor-token-menu-title {
+  padding: 8px 12px 6px;
+  font-size: 11px;
+  color: var(--color-text-weak);
+  border-bottom: 1px solid var(--color-border);
+}
+
+/* タイムラインと下段パネルの境界。ドラッグで下段の高さを変える */
+.editor-splitter {
+  flex-shrink: 0;
+  height: 7px;
+  margin: -3px 0;
+  position: relative;
+  z-index: 4;
+  cursor: row-resize;
+}
+.editor-splitter::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 2px;
+  width: 40px;
+  height: 3px;
+  margin-left: -20px;
+  border-radius: 2px;
+  background: var(--color-border);
+  transition: background 0.12s ease;
+}
+.editor-splitter:hover::after,
+.editor-splitter.dragging::after {
+  background: var(--color-accent);
+}
 
 .editor-side-panel {
   width: auto;
-  min-height: 120px;
+  height: 150px;
+  min-height: 100px;
   flex-shrink: 0;
-  padding: 16px;
+  padding: 16px 24px;
   display: flex;
   flex-direction: row;
-  align-items: flex-start;
-  gap: 10px;
+  align-items: stretch;
+  gap: 20px;
   border-radius: 0;
   border-left: none;
   border-top: 1px solid var(--color-border);
   border-right: none;
   border-bottom: none;
+  box-sizing: border-box;
 }
 
 .editor-side-empty {
   color: var(--color-text-weakest);
   font-size: 13px;
+  margin: 0;
 }
 
 .editor-text-input {
   flex: 1;
-  min-height: 72px;
-  resize: vertical;
+  min-height: 0;
+  resize: none;
+}
+
+.editor-side-info {
+  width: 340px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
 }
 
 .editor-line-time-row {
@@ -301,12 +388,44 @@
 .editor-line-confidence-row {
   font-size: 12px;
   color: var(--color-text-weak);
-  margin-top: 2px;
+}
+
+.editor-tap-hint {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  border-radius: var(--radius-input);
+  background: rgba(242, 183, 5, 0.12);
+  color: var(--color-accent);
 }
 
 .editor-token-edit-hint {
+  margin: 6px 0 0;
+  padding-left: 16px;
   font-size: 11px;
-  line-height: 1.5;
+  line-height: 1.6;
   color: var(--color-text-weakest);
-  margin-top: 8px;
+}
+
+/* data-tip属性の説明ツールチップ(components/tooltip.ts) */
+.app-tooltip {
+  position: fixed;
+  z-index: 200;
+  max-width: 320px;
+  padding: 6px 10px;
+  border-radius: var(--radius-input);
+  background: var(--color-panel-2);
+  border: 1px solid var(--color-border);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+  color: var(--color-text);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-line;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+.app-tooltip.visible {
+  opacity: 1;
 }

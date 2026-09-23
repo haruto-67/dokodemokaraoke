@@ -73,6 +73,21 @@ export function buildAppMenu(getWindow: () => BrowserWindow | null): Menu {
           }
         },
         { type: 'separator' },
+        // macOSはアプリ名メニューに「設定…(⌘,)」があるが、Windowsには設定を開く標準の場所・
+        // ショートカットが無いため、ファイルメニューにCtrl+,で置く
+        ...(isMac
+          ? []
+          : [
+              {
+                label: '設定…',
+                accelerator: 'Ctrl+,',
+                click: () => {
+                  const w = getWindow()
+                  if (w) send(w, 'openSettings')
+                }
+              },
+              { type: 'separator' as const }
+            ]),
         { role: isMac ? 'close' : 'quit' }
       ]
     },

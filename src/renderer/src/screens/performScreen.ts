@@ -279,6 +279,8 @@ export function mountPerformScreen(container: HTMLElement, ctx: AppContext): Scr
   keyUpBtn.addEventListener('click', () => adjustKey(1))
   {
     const initialKeySemitones = state().project?.playback.keySemitones ?? 0
+    // 編集画面の低速再生設定を本番に持ち込まない
+    ctx.playback.setPlaybackRate(1)
     ctx.playback.setPitchShiftSemitones(initialKeySemitones)
     syncKeyLabel(initialKeySemitones)
   }

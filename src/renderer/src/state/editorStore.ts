@@ -32,6 +32,10 @@ export interface EditorState {
   showGuides: boolean
   snapEnabled: boolean
   tapMode: boolean
+  /** 編集画面の再生速度(1=等速)。低速再生でタイミングを合わせる用途 */
+  playbackRate: number
+  /** リズムスナップの細かさ(1拍あたりの分割数)。0はオフ、1=4分音符、2=8分、3=3連8分、4=16分 */
+  beatSnapDivision: number
 }
 
 function emptyAudioState(): EditorAudioState {
@@ -62,7 +66,9 @@ export function createEditorStore() {
     playSource: 'playback',
     showGuides: true,
     snapEnabled: true,
-    tapMode: false
+    tapMode: false,
+    playbackRate: 1,
+    beatSnapDivision: 0
   })
 
   let history = new HistoryManager<DokokaraLine[]>(store.getState().project?.lyrics ?? [])

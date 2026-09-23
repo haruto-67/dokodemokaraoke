@@ -1,14 +1,23 @@
 import type { AppContext } from '../appContext'
 import type { ScreenHandle } from '../lib/screen'
 import { el, clear, formatTime } from '../lib/dom'
-import { saveProject, confirmDiscardIfDirty, bufferForSource } from '../lib/projectActions'
+import { saveProject, confirmDiscardIfDirty, bufferForSource, notifyError } from '../lib/projectActions'
 import { snapTime, nearestGridTime, SNAP_PRIORITY, type SnapTarget } from '../lib/snap'
-import { rescaleTokensExcludingLocked, reallocateRespectingLocks } from '../lib/retiming'
+import { reallocateRespectingLocks } from '../lib/retiming'
+import { resizeLineTokens } from '../lib/resizeLine'
+import { beatGridTimes, estimateTempo, nearestBeatGridTime, onsetStrengthEnvelope } from '../lib/tempo'
 import { buildWaveformPeaks } from '../lib/waveform'
+import {
+  buildComboLookup,
+  comboFromEvent,
+  formatCombo,
+  resolveBindings,
+  type ShortcutActionId
+} from '@shared/keybindings'
 import { tokenizeLine } from '@shared/tokenize'
 import { parseRubyLine, rubyToPlainText } from '@shared/ruby'
 import { allocateTokenTimings, findPitchChangePoints } from '@shared/analysis/allocate'
-import { DEFAULT_HOP_SEC, type DokokaraLine, type DokokaraToken, type PlaySource } from '@shared/types'
+import { DEFAULT_HOP_SEC, type DokokaraLine, type DokokaraRhythm, type DokokaraToken, type PlaySource } from '@shared/types'
 
 const BASE_PPS = 80 // 1倍ズームでの1秒あたりピクセル数
 // タイムラインの末尾より先(再生バーが存在しない範囲)へも手動スクロールできるようにする余白(px)
@@ -20,6 +29,21 @@ const BLOCK_HEIGHT = 40
 const BOUNDARY_HEIGHT = 36
 const EDGE_GRAB_PX = 6
 const MIN_LINE_DURATION = 0.05
+// 文字(トークン)本体をドラッグ移動とみなすまでの移動量(px)。これ未満ならクリック扱い
+const TOKEN_DRAG_THRESHOLD_PX = 3
+const MIN_TOKEN_DURATION = 0.02
+// 再生速度の選択肢。主な用途は低速再生でのタイミング合わせ
+const SPEED_STEPS = [0.5, 0.6, 0.7, 0.75, 0.8, 0.9, 1, 1.25, 1.5]
+// リズムスナップの選択肢(値=1拍あたりの分割数、0はオフ)
+const BEAT_SNAP_OPTIONS: [number, string][] = [
+  [0, 'リズム: オフ'],
+  [1, '4分音符'],
+  [2, '8分音符'],
+  [3, '3連8分'],
+  [4, '16分音符']
+]
+const BOTTOM_PANEL_HEIGHT_KEY = 'dokokara.editor.bottomPanelHeight'
+const MIN_BOTTOM_PANEL_HEIGHT = 100
 
 export function mountEditorScreen(container: HTMLElement, ctx: AppContext): ScreenHandle {
   const root = el('div', { className: 'editor-screen' })
@@ -36,8 +60,9 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
   const backBtn = el('button', { className: 'btn btn-ghost' }, ['← ホームへ'])
   const title = el('h1', { className: 'editor-title' }, [ctx.editor.store.getState().project?.name ?? ''])
   const saveBtn = el('button', { className: 'btn btn-ghost' }, ['保存'])
+  const settingsBtn = el('button', { className: 'btn btn-ghost' }, ['⚙ 設定'])
   const performBtn = el('button', { className: 'btn btn-primary' }, ['本番へ →'])
-  header.append(backBtn, title, saveBtn, performBtn)
+  header.append(backBtn, title, saveBtn, settingsBtn, performBtn)
 
   backBtn.addEventListener('click', async () => {
     if (!(await confirmDiscardIfDirty(ctx))) return
@@ -45,20 +70,28 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
     await ctx.refreshHome()
   })
   saveBtn.addEventListener('click', () => void saveProject(ctx, false))
+  settingsBtn.addEventListener('click', () => ctx.openSettings())
   performBtn.addEventListener('click', () => ctx.navigate('perform'))
 
   // ---------- ツールバー ----------
   const toolbar = el('div', { className: 'editor-toolbar' })
   const playBtn = el('button', { className: 'btn btn-ghost' }, ['▶'])
   const timeLabel = el('span', { className: 'mono editor-time' }, ['0:00.00'])
+  const speedSelect = el('select', { className: 'editor-select' }) as HTMLSelectElement
+  for (const r of SPEED_STEPS) speedSelect.appendChild(el('option', { value: String(r) }, [`${r}x`]))
   const sourceSelect = el('select', { className: 'editor-select' }) as HTMLSelectElement
   sourceSelect.append(
     el('option', { value: 'playback' }, ['オフボーカル']),
     el('option', { value: 'original' }, ['オンボーカル']),
     el('option', { value: 'analysis' }, ['ボーカルのみ'])
   )
-  const guidesBtn = el('button', { className: 'btn btn-ghost' }, ['ガイド'])
+  const guidesBtn = el('button', { className: 'btn btn-ghost' }, ['ガイド線'])
   const snapBtn = el('button', { className: 'btn btn-ghost' }, ['スナップ'])
+  const beatSnapSelect = el('select', { className: 'editor-select' }) as HTMLSelectElement
+  for (const [value, label] of BEAT_SNAP_OPTIONS) beatSnapSelect.appendChild(el('option', { value: String(value) }, [label]))
+  const bpmInput = el('input', { type: 'number', min: '30', max: '300', step: '0.1', className: 'editor-bpm-input' }) as HTMLInputElement
+  const bpmEstimateBtn = el('button', { className: 'btn btn-ghost' }, ['BPM推定'])
+  const beatAlignBtn = el('button', { className: 'btn btn-ghost' }, ['拍を合わせる'])
   const zoomOutBtn = el('button', { className: 'btn btn-ghost' }, ['−'])
   const zoomFitBtn = el('button', { className: 'btn btn-ghost' }, ['全体表示'])
   const zoomInBtn = el('button', { className: 'btn btn-ghost' }, ['＋'])
@@ -77,24 +110,60 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
   const jingleCheckbox = el('input', { type: 'checkbox' }) as HTMLInputElement
   const jingleLabel = el('label', { className: 'editor-select', style: cueLabelStyle }, [jingleCheckbox, 'キー提示音'])
 
+  const group = (...children: HTMLElement[]): HTMLElement => el('div', { className: 'editor-toolbar-group' }, children)
+  const offsetWrap = el('span', { className: 'editor-offset-wrap' }, [el('span', { className: 'mono' }, ['オフセット']), offsetLabel])
   toolbar.append(
-    playBtn,
-    timeLabel,
-    sourceSelect,
-    guidesBtn,
-    snapBtn,
-    zoomOutBtn,
-    zoomFitBtn,
-    zoomInBtn,
-    addLineBtn,
-    tapModeBtn,
-    reallocateBtn,
-    countInLabel,
-    jingleLabel,
+    group(playBtn, timeLabel, speedSelect, sourceSelect),
+    group(zoomOutBtn, zoomFitBtn, zoomInBtn, guidesBtn),
+    group(snapBtn, beatSnapSelect, bpmInput, bpmEstimateBtn, beatAlignBtn),
+    group(addLineBtn, reallocateBtn, tapModeBtn),
+    group(countInLabel, jingleLabel),
     el('span', { className: 'editor-toolbar-spacer' }, []),
-    el('span', { className: 'mono' }, ['オフセット']),
-    offsetLabel
+    offsetWrap
   )
+
+  // ---------- ツールチップ(カーソルを置くと説明が出る。割り当て済みのショートカットも併記) ----------
+  const tipDefs: [HTMLElement, string, ShortcutActionId | null][] = [
+    [backBtn, 'ホーム画面へ戻ります(未保存の変更があれば確認します)', null],
+    [saveBtn, 'プロジェクトを上書き保存します', null],
+    [settingsBtn, '設定を開きます(ショートカットキーの変更もここから)', 'openSettings'],
+    [performBtn, '本番(カラオケ再生)画面へ移ります', 'goToPerform'],
+    [playBtn, '再生・一時停止', 'playPause'],
+    [timeLabel, '現在の再生位置', null],
+    [speedSelect, '再生速度。音程は変えずに速さだけ変わります。ゆっくり再生してタイミングを合わせる時に', null],
+    [sourceSelect, '編集中に流す音声(伴奏のみ / 原曲 / ボーカルのみ)', null],
+    [zoomOutBtn, 'タイムラインを縮小', 'zoomOut'],
+    [zoomFitBtn, '曲全体が画面に収まるように表示', 'zoomFit'],
+    [zoomInBtn, 'タイムラインを拡大(トラックパッドのピンチでも可)', 'zoomIn'],
+    [
+      guidesBtn,
+      'ガイド線の表示切り替え。自動解析で見つけたフレーズの区切り(灰色)と音の出だし(赤)、リズムスナップ中は拍の線を波形に重ねて表示します',
+      'toggleGuides'
+    ],
+    [snapBtn, 'ドラッグ時に再生位置・他の行の端・ガイド線などへ吸着させます。Altキーを押しながらドラッグすると一時的に無効', 'toggleSnap'],
+    [beatSnapSelect, 'リズムスナップ: 曲のテンポに合わせた音符単位(4分・8分など)へ吸着させます', 'cycleBeatSnap'],
+    [bpmInput, '曲のテンポ(BPM)。リズムスナップの拍の間隔になります', null],
+    [bpmEstimateBtn, '伴奏の音からBPMと拍の位置を自動で推定します', null],
+    [beatAlignBtn, '拍の線がずれている時に、現在の再生位置を拍の頭として合わせ直します', null],
+    [addLineBtn, '再生位置に新しい行を追加します', 'addLine'],
+    [reallocateBtn, '選択中の行の文字タイミングを自動で割り振り直します(ロックした文字はそのまま)', 'reallocateLine'],
+    [
+      tapModeBtn,
+      'タップ入力モード: 曲を再生しながらキーを押すたびに、選択中の行の文字の開始時刻を1文字ずつ確定していきます',
+      'toggleTapMode'
+    ],
+    [countInLabel, '本番で再生前に4カウントを鳴らすか(この曲だけの設定)', null],
+    [jingleLabel, '本番で再生前にキーの音を鳴らすか(この曲だけの設定)', null],
+    [offsetWrap, '歌詞表示のタイミング補正。音声はずらさず、表示だけを前後させます', 'offsetIncrease']
+  ]
+  function refreshTips(): void {
+    const isMac = navigator.platform.toLowerCase().includes('mac')
+    const bindings = resolveBindings(settings().shortcuts)
+    for (const [target, text, actionId] of tipDefs) {
+      const combos = actionId ? bindings[actionId] : []
+      target.dataset.tip = combos.length > 0 ? `${text}\n[${combos.map((c) => formatCombo(c, isMac)).join(' / ')}]` : text
+    }
+  }
 
   function syncCueSelects(): void {
     const pb = state().project?.playback
@@ -135,18 +204,61 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
 
   // ---------- 下段パネル(選択行のテキスト編集) ----------
   const sidePanel = el('div', { className: 'editor-side-panel panel' })
-  const sidePanelEmpty = el('p', { className: 'editor-side-empty' }, ['行を選択するとここで編集できます'])
+  const sidePanelEmpty = el('p', { className: 'editor-side-empty' }, ['行を選択するとここで歌詞を編集できます'])
   const textArea = el('textarea', { className: 'editor-text-input', rows: 3 }) as HTMLTextAreaElement
   const lineTimeRow = el('div', { className: 'editor-line-time-row mono' })
   const lineConfidenceRow = el('div', { className: 'editor-line-confidence-row mono' })
-  const tokenEditHint = el('p', { className: 'editor-token-edit-hint' }, [
-    '文字境界バーの区切り線をドラッグしてタイミング調整。行頭・行末の太い線は最初/最後の文字だけを個別調整。文字を右クリックすると分割・結合・ロック・休符の追加ができます。'
+  const tapModeHint = el('p', { className: 'editor-tap-hint' })
+  const tokenEditHint = el('ul', { className: 'editor-token-edit-hint' }, [
+    el('li', {}, ['文字をドラッグで移動、文字の区切り線をドラッグで境界を調整']),
+    el('li', {}, ['行ブロックの端をドラッグで行の長さを変更(はみ出した文字だけ縮みます)']),
+    el('li', {}, ['文字を右クリックで分割・結合・ロック・休符の追加'])
   ])
-  sidePanel.append(sidePanelEmpty, textArea, lineTimeRow, lineConfidenceRow, tokenEditHint)
+  const sideInfo = el('div', { className: 'editor-side-info' }, [lineTimeRow, lineConfidenceRow, tapModeHint, tokenEditHint])
+  sidePanel.append(sidePanelEmpty, textArea, sideInfo)
   textArea.style.display = 'none'
-  tokenEditHint.style.display = 'none'
+  sideInfo.style.display = 'none'
 
-  root.append(header, toolbar, el('div', { className: 'editor-main' }, [scrollArea, playheadIndicator, sidePanel]))
+  // タイムラインと下段パネルの境界をドラッグして下段の高さを変えられるようにする
+  // (以前はテキスト欄右下の小さなつまみでしかサイズ変更できず分かりにくかった)
+  const splitter = el('div', { className: 'editor-splitter' })
+  splitter.dataset.tip = 'ドラッグで歌詞入力欄の高さを変更'
+  const editorMain = el('div', { className: 'editor-main' }, [scrollArea, playheadIndicator, splitter, sidePanel])
+  root.append(header, toolbar, editorMain)
+
+  function applyBottomPanelHeight(px: number): void {
+    const max = Math.max(MIN_BOTTOM_PANEL_HEIGHT, editorMain.clientHeight - 240)
+    const clamped = Math.round(Math.max(MIN_BOTTOM_PANEL_HEIGHT, Math.min(px, max)))
+    sidePanel.style.height = `${clamped}px`
+  }
+  {
+    let saved = NaN
+    try {
+      saved = Number(localStorage.getItem(BOTTOM_PANEL_HEIGHT_KEY))
+    } catch {
+      /* 保存値が読めなくても既定の高さで表示する */
+    }
+    if (Number.isFinite(saved) && saved > 0) sidePanel.style.height = `${saved}px`
+  }
+  splitter.addEventListener('pointerdown', (e) => {
+    e.preventDefault()
+    const startY = e.clientY
+    const startHeight = sidePanel.getBoundingClientRect().height
+    splitter.classList.add('dragging')
+    const onMove = (ev: PointerEvent): void => applyBottomPanelHeight(startHeight - (ev.clientY - startY))
+    const onUp = (): void => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      splitter.classList.remove('dragging')
+      try {
+        localStorage.setItem(BOTTOM_PANEL_HEIGHT_KEY, String(sidePanel.getBoundingClientRect().height))
+      } catch {
+        /* 保存できなくても操作自体は有効 */
+      }
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  })
 
   // ---------- 状態 ----------
   function state() {
@@ -242,6 +354,25 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
         line.setAttribute('opacity', '0.18')
         svg.appendChild(line)
       }
+      // リズムスナップ中は拍グリッドを表示する(拍の頭は濃く、分割線は薄く)
+      const rhythm = s.project?.rhythm
+      if (rhythm && s.beatSnapDivision > 0) {
+        const beatSec = 60 / rhythm.bpm
+        for (const t of beatGridTimes(rhythm, s.beatSnapDivision, 0, totalDurationSec())) {
+          const beatPos = (t - rhythm.firstBeatSec) / beatSec
+          const onBeat = Math.abs(beatPos - Math.round(beatPos)) < 1e-6
+          const line = document.createElementNS(ns, 'line')
+          const x = xForTime(t)
+          line.setAttribute('x1', String(x))
+          line.setAttribute('x2', String(x))
+          line.setAttribute('y1', '0')
+          line.setAttribute('y2', String(RIBBON_HEIGHT))
+          line.setAttribute('stroke', 'var(--color-accent)')
+          line.setAttribute('stroke-width', '1')
+          line.setAttribute('opacity', onBeat ? '0.45' : '0.15')
+          svg.appendChild(line)
+        }
+      }
     }
 
     // ピッチリボン(二層描画: 太いグロー + 細い明色線)
@@ -330,6 +461,7 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
 
   function attachBlockPointerHandlers(blockEl: HTMLElement, line: DokokaraLine, index: number, allLines: DokokaraLine[]): void {
     blockEl.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return
       e.stopPropagation()
       const rect = blockEl.getBoundingClientRect()
       const offsetX = e.clientX - rect.left
@@ -364,17 +496,17 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
             newEnd = maxEnd
             newStart = newEnd - (origEnd - origStart)
           }
-          updateLineTiming(line.id, newStart, newEnd, false)
+          updateLineTiming(line.id, newStart, newEnd, false, line.tokens)
         } else if (mode === 'resize-left') {
           let newStart = snapCandidate(origStart + deltaSec, staticTargets, ev.altKey)
           const minStart = prevLine ? prevLine.end : 0
           newStart = Math.max(minStart, Math.min(newStart, origEnd - MIN_LINE_DURATION))
-          updateLineTiming(line.id, newStart, origEnd, true)
+          updateLineTiming(line.id, newStart, origEnd, true, line.tokens)
         } else {
           let newEnd = snapCandidate(origEnd + deltaSec, staticTargets, ev.altKey)
           const maxEnd = nextLine ? nextLine.start : Infinity
           newEnd = Math.min(maxEnd, Math.max(newEnd, origStart + MIN_LINE_DURATION))
-          updateLineTiming(line.id, origStart, newEnd, true)
+          updateLineTiming(line.id, origStart, newEnd, true, line.tokens)
         }
       }
       const onUp = (): void => {
@@ -393,8 +525,14 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
   /** ドラッグ中の候補時刻をスナップ候補へ吸着させる。0.1秒グリッドは候補値ごとに動的に算出する(§4.7.3優先度5)。 */
   function snapCandidate(candidateTime: number, staticTargets: SnapTarget[], altKeyHeld: boolean): number {
     if (!state().snapEnabled || altKeyHeld) return candidateTime
-    const targets = [...staticTargets, { time: nearestGridTime(candidateTime), priority: SNAP_PRIORITY.grid }]
-    return snapTime(candidateTime, targets, pps(), settings().snapDistancePx)
+    const rhythm = state().project?.rhythm
+    const division = state().beatSnapDivision
+    // リズムスナップ中は0.1秒グリッドの代わりに拍グリッドへ吸着させる(両方あると拍から外れた位置に吸われる)
+    const gridTarget: SnapTarget =
+      rhythm && division > 0
+        ? { time: nearestBeatGridTime(candidateTime, rhythm, division), priority: SNAP_PRIORITY.beatGrid }
+        : { time: nearestGridTime(candidateTime), priority: SNAP_PRIORITY.grid }
+    return snapTime(candidateTime, [...staticTargets, gridTarget], pps(), settings().snapDistancePx)
   }
 
   function buildSnapTargets(excludeIndex: number, allLines: DokokaraLine[]): SnapTarget[] {
@@ -413,11 +551,22 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
     return targets
   }
 
-  function updateLineTiming(lineId: string, newStart: number, newEnd: number, rescale: boolean): void {
+  /**
+   * resizeがtrueなら行の端だけを動かす。均等割り付けはせず、行からはみ出した文字だけを縮める
+   * (手で合わせた文字タイミングが行末調整で崩れる不具合への対応)。ドラッグ開始時点のトークンを
+   * 基準に毎回計算し直すことで、縮めてから戻した時に元の文字タイミングへ戻るようにする。
+   */
+  function updateLineTiming(
+    lineId: string,
+    newStart: number,
+    newEnd: number,
+    resize: boolean,
+    origTokens: DokokaraToken[]
+  ): void {
     ctx.editor.applyTransient((lyrics) =>
       lyrics.map((l) => {
         if (l.id !== lineId) return l
-        const tokens = rescale ? rescaleTokensExcludingLocked(l.tokens, newStart, newEnd) : shiftTokens(l.tokens, newStart - l.start)
+        const tokens = resize ? resizeLineTokens(origTokens, newStart, newEnd, MIN_TOKEN_DURATION) : shiftTokens(l.tokens, newStart - l.start)
         return { ...l, start: newStart, end: newEnd, tokens }
       })
     )
@@ -457,30 +606,29 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
         tokenEl.title = token.ruby ? `${token.text || '（続き）'} / ${token.ruby}` : token.text
         tokenEl.style.left = `${x}px`
         tokenEl.style.width = `${w}px`
-        tokenEl.addEventListener('click', (event) => {
-          event.stopPropagation()
-          ctx.editor.store.setState({ selection: { lineId: line.id, tokenIndex: i } })
-          renderBlocks()
-          renderBoundary()
-          renderSidePanel()
-        })
+        // クリックはpointerdown→pointerupの移動量で判定する(attachTokenDrag内)。
+        // clickイベントでは選択しない: ドラッグ後のclickで選択し直すと二重に再描画されるため。
+        tokenEl.addEventListener('click', (event) => event.stopPropagation())
+        attachTokenDrag(tokenEl, line, i)
         tokenEl.addEventListener('contextmenu', (e) => {
           e.preventDefault()
-          showTokenMenu(e.clientX, e.clientY, line, i)
+          e.stopPropagation()
+          ctx.editor.store.setState({ selection: { lineId: line.id, tokenIndex: i } })
+          showTokenMenu(e.clientX, e.clientY, line.id, i)
         })
         boundaryLayer.appendChild(tokenEl)
 
-        if (selectedLine && i < line.tokens.length - 1) {
-          const divider = el('div', { className: 'editor-token-divider' })
+        // 区切り線は選択中の行に限らず全行に出す(以前は一度行をクリックしないと文字境界を触れなかった)
+        if (i < line.tokens.length - 1) {
+          const divider = el('div', { className: `editor-token-divider${selectedLine ? ' selected-line' : ''}` })
           divider.style.left = `${xForTime(token.end)}px`
           attachDividerDrag(divider, line, i)
           boundaryLayer.appendChild(divider)
         }
       })
 
-      // 行頭・行末のハンドル(§4.7.3): 最初/最後の文字だけの開始・終了時刻を、
-      // 行全体をリスケールせずに個別調整できるようにする(ブロック端ハンドルは全トークン比例伸縮のため別物)。
-      if (selectedLine && line.tokens.length > 0) {
+      // 行頭・行末のハンドル(§4.7.3): 最初/最後の文字だけの開始・終了時刻を個別調整する。
+      if (line.tokens.length > 0) {
         const startHandle = el('div', { className: 'editor-token-divider editor-line-edge-handle' })
         startHandle.style.left = `${xForTime(line.tokens[0].start)}px`
         attachLineEdgeDrag(startHandle, line, lineIndex, lines, 'start')
@@ -503,7 +651,9 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
     edge: 'start' | 'end'
   ): void {
     handle.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return
       e.stopPropagation()
+      selectLineIfNeeded(line.id)
       ctx.editor.beginChange()
       isDragging = true
       const startClientX = e.clientX
@@ -556,7 +706,9 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
 
   function attachDividerDrag(divider: HTMLElement, line: DokokaraLine, tokenIndex: number): void {
     divider.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return
       e.stopPropagation()
+      selectLineIfNeeded(line.id)
       ctx.editor.beginChange()
       isDragging = true
       const left = line.tokens[tokenIndex]
@@ -564,14 +716,7 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
       const origBoundary = left.end
       const startClientX = e.clientX
 
-      // §4.7.3: 文字境界バーのドラッグにも同じスナップ機構を適用する(隣接ブロック端を除く)
-      const s = state()
-      const staticTargets: SnapTarget[] = [{ time: playheadDisplaySec(), priority: SNAP_PRIORITY.playhead }]
-      for (const p of s.project?.analysis.phrases ?? []) {
-        staticTargets.push({ time: p.start, priority: SNAP_PRIORITY.phraseBoundary })
-        staticTargets.push({ time: p.end, priority: SNAP_PRIORITY.phraseBoundary })
-      }
-      for (const onset of onsetsFromState()) staticTargets.push({ time: onset, priority: SNAP_PRIORITY.onset })
+      const staticTargets = buildTokenSnapTargets()
 
       const onMove = (ev: PointerEvent): void => {
         const deltaSec = (ev.clientX - startClientX) / pps()
@@ -604,55 +749,166 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
     })
   }
 
+  /** §4.7.3: 文字単位のドラッグにも同じスナップ機構を適用する(隣接ブロック端を除く) */
+  function buildTokenSnapTargets(): SnapTarget[] {
+    const s = state()
+    const targets: SnapTarget[] = [{ time: playheadDisplaySec(), priority: SNAP_PRIORITY.playhead }]
+    for (const p of s.project?.analysis.phrases ?? []) {
+      targets.push({ time: p.start, priority: SNAP_PRIORITY.phraseBoundary })
+      targets.push({ time: p.end, priority: SNAP_PRIORITY.phraseBoundary })
+    }
+    for (const onset of onsetsFromState()) targets.push({ time: onset, priority: SNAP_PRIORITY.onset })
+    return targets
+  }
+
+  /** ドラッグを始めた行が未選択なら選択する(ドラッグ前に一度クリックして選択する手間を無くすため) */
+  function selectLineIfNeeded(lineId: string): void {
+    if (state().selection.lineId !== lineId) selectLine(lineId)
+  }
+
+  /**
+   * 文字本体のドラッグ移動。文字の長さは保ったまま前後に動かし、接している隣の文字の境界も追従させる
+   * (隣の文字は最小長まで縮む)。動かさずに離した場合はクリックとしてその文字を選択する。
+   */
+  function attachTokenDrag(tokenEl: HTMLElement, line: DokokaraLine, tokenIndex: number): void {
+    tokenEl.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return
+      e.stopPropagation()
+      const startClientX = e.clientX
+      const tokens = line.tokens
+      const tok = tokens[tokenIndex]
+      const prev = tokens[tokenIndex - 1] ?? null
+      const next = tokens[tokenIndex + 1] ?? null
+      const duration = tok.end - tok.start
+      // 隣と接している(境界を共有している)時だけ隣の端を追従させる。離れている時は隣の端までしか動かさない
+      const prevTouching = prev !== null && Math.abs(prev.end - tok.start) < 1e-6
+      const nextTouching = next !== null && Math.abs(next.start - tok.end) < 1e-6
+      const minStart = prev ? (prevTouching ? prev.start + MIN_TOKEN_DURATION : prev.end) : line.start
+      const maxEnd = next ? (nextTouching ? next.end - MIN_TOKEN_DURATION : next.start) : line.end
+      let staticTargets: SnapTarget[] | null = null
+      let dragging = false
+
+      const onMove = (ev: PointerEvent): void => {
+        if (!dragging) {
+          if (Math.abs(ev.clientX - startClientX) < TOKEN_DRAG_THRESHOLD_PX) return
+          dragging = true
+          selectLineIfNeeded(line.id)
+          ctx.editor.beginChange()
+          isDragging = true
+          staticTargets = buildTokenSnapTargets()
+        }
+        const deltaSec = (ev.clientX - startClientX) / pps()
+        let newStart = snapCandidate(tok.start + deltaSec, staticTargets ?? [], ev.altKey)
+        newStart = Math.max(minStart, Math.min(newStart, maxEnd - duration))
+        const newEnd = newStart + duration
+        ctx.editor.applyTransient((lyrics) =>
+          lyrics.map((l) => {
+            if (l.id !== line.id) return l
+            const updated = l.tokens.map((t, i) => {
+              if (i === tokenIndex) return { ...t, start: newStart, end: newEnd }
+              if (i === tokenIndex - 1 && prevTouching) return { ...t, end: newStart }
+              if (i === tokenIndex + 1 && nextTouching) return { ...t, start: newEnd }
+              return t
+            })
+            return { ...l, tokens: updated, confidence: null }
+          })
+        )
+        renderBoundary()
+      }
+      const onUp = (): void => {
+        window.removeEventListener('pointermove', onMove)
+        window.removeEventListener('pointerup', onUp)
+        dragCleanup = null
+        if (dragging) {
+          ctx.editor.commitChange()
+          isDragging = false
+          renderAll()
+          return
+        }
+        ctx.editor.store.setState({ selection: { lineId: line.id, tokenIndex } })
+        renderBlocks()
+        renderBoundary()
+        renderSidePanel()
+      }
+      window.addEventListener('pointermove', onMove)
+      window.addEventListener('pointerup', onUp)
+      dragCleanup = onUp
+    })
+  }
+
   // ---------- トークン右クリックメニュー ----------
   let openMenu: HTMLElement | null = null
   function closeTokenMenu(): void {
     openMenu?.remove()
     openMenu = null
+    window.removeEventListener('pointerdown', onPointerDownOutsideMenu, true)
   }
-  function showTokenMenu(clientX: number, clientY: number, line: DokokaraLine, tokenIndex: number): void {
+  // 以前はメニュー項目を押した時のpointerdownでもメニューが閉じてしまい、clickが届かず
+  // どの項目も効かなかった。メニューの外を押した時だけ閉じる。
+  function onPointerDownOutsideMenu(e: PointerEvent): void {
+    if (openMenu && !openMenu.contains(e.target as Node)) closeTokenMenu()
+  }
+  function showTokenMenu(clientX: number, clientY: number, lineId: string, tokenIndex: number): void {
     closeTokenMenu()
+    const line = (state().project?.lyrics ?? []).find((l) => l.id === lineId)
+    const token = line?.tokens[tokenIndex]
+    if (!line || !token) return
     const menu = el('div', { className: 'editor-token-menu panel-2' })
-    menu.style.left = `${clientX}px`
-    menu.style.top = `${clientY}px`
-
-    if (tokenIndex > 0) {
-      const mergeItem = el('div', { className: 'editor-token-menu-item' }, ['前と結合'])
-      mergeItem.addEventListener('click', () => {
-        mergeTokenWithPrev(line.id, tokenIndex)
-        closeTokenMenu()
-      })
-      menu.appendChild(mergeItem)
+    const addItem = (label: string, action: () => void, enabled = true, tip = ''): void => {
+      const item = el('div', { className: `editor-token-menu-item${enabled ? '' : ' disabled'}` }, [label])
+      if (tip) item.dataset.tip = tip
+      if (enabled) {
+        item.addEventListener('click', () => {
+          closeTokenMenu()
+          action()
+        })
+      }
+      menu.appendChild(item)
     }
-    const splitItem = el('div', { className: 'editor-token-menu-item' }, ['ここで分割'])
-    splitItem.addEventListener('click', () => {
-      splitToken(line.id, tokenIndex)
-      closeTokenMenu()
-    })
-    menu.appendChild(splitItem)
-
-    const lockItem = el('div', { className: 'editor-token-menu-item' }, [line.tokens[tokenIndex].locked ? 'ロック解除' : 'ロック'])
-    lockItem.addEventListener('click', () => {
-      toggleTokenLock(line.id, tokenIndex)
-      closeTokenMenu()
-    })
-    menu.appendChild(lockItem)
-
-    const restBeforeItem = el('div', { className: 'editor-token-menu-item' }, ['前に0.2秒の休符を追加'])
-    restBeforeItem.addEventListener('click', () => {
-      addRestAroundToken(line.id, tokenIndex, 'before')
-      closeTokenMenu()
-    })
-    const restAfterItem = el('div', { className: 'editor-token-menu-item' }, ['後ろに0.2秒の休符を追加'])
-    restAfterItem.addEventListener('click', () => {
-      addRestAroundToken(line.id, tokenIndex, 'after')
-      closeTokenMenu()
-    })
-    menu.append(restBeforeItem, restAfterItem)
+    const chars = Array.from(token.text)
+    const label = token.text || token.ruby || '（続き）'
+    menu.appendChild(el('div', { className: 'editor-token-menu-title' }, [`「${label}」`]))
+    addItem('前の文字と結合', () => mergeTokenWithPrev(lineId, tokenIndex), tokenIndex > 0)
+    addItem('次の文字と結合', () => mergeTokenWithPrev(lineId, tokenIndex + 1), tokenIndex < line.tokens.length - 1)
+    addItem(
+      '1文字目で分割',
+      () => splitToken(lineId, tokenIndex),
+      chars.length > 1,
+      chars.length > 1 ? '' : '1文字だけの文字は分割できません'
+    )
+    addItem(token.locked ? 'ロック解除' : 'ロック(再配分で動かさない)', () => toggleTokenLock(lineId, tokenIndex))
+    addItem('前に0.2秒の休符を入れる', () => addRestAroundToken(lineId, tokenIndex, 'before'))
+    addItem('後ろに0.2秒の休符を入れる', () => addRestAroundToken(lineId, tokenIndex, 'after'))
+    addItem('この文字を再生位置から始める', () => startTokenAtPlayhead(lineId, tokenIndex))
 
     document.body.appendChild(menu)
+    // 画面外にはみ出さないよう位置を補正する
+    const rect = menu.getBoundingClientRect()
+    menu.style.left = `${Math.max(4, Math.min(clientX, window.innerWidth - rect.width - 4))}px`
+    menu.style.top = `${Math.max(4, Math.min(clientY, window.innerHeight - rect.height - 4))}px`
     openMenu = menu
-    window.setTimeout(() => window.addEventListener('pointerdown', closeTokenMenu, { once: true }), 0)
+    window.addEventListener('pointerdown', onPointerDownOutsideMenu, true)
+  }
+
+  /** 文字の開始時刻を再生位置にする(前の文字の終わりも合わせて動かす)。タップ入力の1回分と同じ操作 */
+  function startTokenAtPlayhead(lineId: string, tokenIndex: number): void {
+    const t = playheadDisplaySec()
+    ctx.editor.applyAndCommit((lyrics) =>
+      lyrics.map((l) => {
+        if (l.id !== lineId) return l
+        const cur = l.tokens[tokenIndex]
+        const prev = l.tokens[tokenIndex - 1]
+        const lower = prev ? prev.start + MIN_TOKEN_DURATION : l.start
+        const clamped = Math.max(lower, Math.min(t, cur.end - MIN_TOKEN_DURATION))
+        const tokens = l.tokens.map((tk, i) => {
+          if (i === tokenIndex) return { ...tk, start: clamped }
+          if (i === tokenIndex - 1) return { ...tk, end: clamped }
+          return tk
+        })
+        return { ...l, tokens, confidence: null }
+      })
+    )
+    renderAll()
   }
 
   /** トークンの端を縮め、隣接トークンとの間(または行端)に発声しない空白を作る。 */
@@ -746,14 +1002,22 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
     if (!line) {
       sidePanelEmpty.style.display = 'block'
       textArea.style.display = 'none'
-      tokenEditHint.style.display = 'none'
-      lineTimeRow.textContent = ''
-      lineConfidenceRow.textContent = ''
+      sideInfo.style.display = 'none'
       return
     }
     sidePanelEmpty.style.display = 'none'
     textArea.style.display = 'block'
-    tokenEditHint.style.display = 'block'
+    sideInfo.style.display = 'flex'
+    if (s.tapMode) {
+      const bindings = resolveBindings(settings().shortcuts)
+      const isMac = navigator.platform.toLowerCase().includes('mac')
+      const keyName = (id: ShortcutActionId): string => bindings[id].map((c) => formatCombo(c, isMac)).join(' / ') || '未割り当て'
+      const next = line.tokens[s.selection.tokenIndex ?? 0]
+      tapModeHint.textContent = `タップ入力中: 再生しながら [${keyName('tapConfirm')}] で「${next ? next.ruby ?? next.text : '―'}」の開始を確定、[${keyName('tapBack')}] で1文字戻る`
+      tapModeHint.style.display = 'block'
+    } else {
+      tapModeHint.style.display = 'none'
+    }
     if (document.activeElement !== textArea) textArea.value = line.text
     lineTimeRow.textContent = `${formatTime(line.start)} 〜 ${formatTime(line.end)}`
     lineConfidenceRow.textContent =
@@ -1016,10 +1280,89 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
     syncToggleButtons()
   })
   tapModeBtn.addEventListener('click', () => {
-    ctx.editor.store.setState({ tapMode: !state().tapMode })
+    const tapMode = !state().tapMode
+    const s = state()
+    // タップ入力を始める時に行が未選択なら、再生位置付近の行を自動で選ぶ(何も起きないように見えるのを防ぐ)
+    if (tapMode && !s.selection.lineId) {
+      const t = playheadDisplaySec()
+      const lines = s.project?.lyrics ?? []
+      const target = lines.find((l) => l.end > t) ?? lines[lines.length - 1]
+      if (target) ctx.editor.store.setState({ selection: { lineId: target.id, tokenIndex: 0 } })
+    }
+    ctx.editor.store.setState({ tapMode })
     syncToggleButtons()
+    renderAll()
   })
   syncToggleButtons()
+
+  // ---------- 再生速度(低速再生での編集用) ----------
+  function setPlaybackRate(rate: number): void {
+    ctx.editor.store.setState({ playbackRate: rate })
+    ctx.playback.setPlaybackRate(rate)
+    speedSelect.value = String(rate)
+    speedSelect.classList.toggle('active', rate !== 1)
+  }
+  speedSelect.addEventListener('change', () => setPlaybackRate(Number(speedSelect.value)))
+  setPlaybackRate(state().playbackRate)
+
+  // ---------- リズムスナップ(曲のテンポに合わせた音符単位への吸着) ----------
+  function setRhythm(rhythm: DokokaraRhythm | null): void {
+    const p = state().project
+    if (!p) return
+    ctx.editor.store.setState({ project: { ...p, rhythm } })
+    syncRhythmControls()
+    renderRibbon()
+  }
+  function setBeatSnapDivision(division: number): void {
+    ctx.editor.store.setState({ beatSnapDivision: division })
+    // テンポ未設定のままリズムスナップを選んだら、まず自動推定する
+    if (division > 0 && !state().project?.rhythm) estimateRhythm()
+    syncRhythmControls()
+    renderRibbon()
+  }
+  function syncRhythmControls(): void {
+    const s = state()
+    const rhythm = s.project?.rhythm ?? null
+    beatSnapSelect.value = String(s.beatSnapDivision)
+    beatSnapSelect.classList.toggle('active', s.beatSnapDivision > 0)
+    if (document.activeElement !== bpmInput) bpmInput.value = rhythm ? String(rhythm.bpm) : ''
+    bpmInput.placeholder = 'BPM'
+    const on = s.beatSnapDivision > 0
+    bpmInput.style.display = on ? '' : 'none'
+    bpmEstimateBtn.style.display = on ? '' : 'none'
+    beatAlignBtn.style.display = on ? '' : 'none'
+  }
+  function estimateRhythm(): void {
+    const s = state()
+    // 伴奏(オフボーカル)の方がドラム等のリズムが明瞭なので優先する
+    const buffer = s.audio.playbackBuffer ?? s.audio.originalBuffer ?? s.audio.analysisBuffer
+    if (!buffer) return
+    const channels: Float32Array[] = []
+    for (let i = 0; i < buffer.numberOfChannels; i++) channels.push(buffer.getChannelData(i))
+    const { envelope, frameRate } = onsetStrengthEnvelope(channels, buffer.sampleRate)
+    const rhythm = estimateTempo(envelope, frameRate)
+    if (!rhythm) {
+      notifyError('テンポを推定できませんでした。BPMを直接入力してください。')
+      return
+    }
+    setRhythm(rhythm)
+  }
+  beatSnapSelect.addEventListener('change', () => setBeatSnapDivision(Number(beatSnapSelect.value)))
+  bpmInput.addEventListener('change', () => {
+    const bpm = Number(bpmInput.value)
+    if (!Number.isFinite(bpm) || bpm < 30 || bpm > 300) {
+      syncRhythmControls()
+      return
+    }
+    setRhythm({ bpm, firstBeatSec: state().project?.rhythm?.firstBeatSec ?? 0 })
+  })
+  bpmEstimateBtn.addEventListener('click', estimateRhythm)
+  beatAlignBtn.addEventListener('click', () => {
+    const rhythm = state().project?.rhythm
+    if (!rhythm) return
+    setRhythm({ ...rhythm, firstBeatSec: playheadDisplaySec() })
+  })
+  syncRhythmControls()
 
   // ---------- ズーム ----------
   function setZoom(z: number): void {
@@ -1105,129 +1448,181 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
     ctx.editor.store.setState({ selection: { lineId: s.selection.lineId, tokenIndex: Math.max(0, idx - 1) } })
   }
 
-  // ---------- キーボードショートカット(§4.9) ----------
+  // ---------- キーボードショートカット(§4.9、割り当ては設定画面で変更可能) ----------
+  /** 文字入力中の欄ではショートカットを効かせない(チェックボックス等は対象外にして、押した後もショートカットが効くようにする) */
   function isEditableTarget(target: EventTarget | null): boolean {
     const el = target as HTMLElement | null
-    return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')
+    if (!el) return false
+    if (el.tagName === 'TEXTAREA') return true
+    if (el.tagName === 'INPUT') return !['checkbox', 'radio', 'range', 'button'].includes((el as HTMLInputElement).type)
+    return false
+  }
+
+  let comboLookup = buildComboLookup(resolveBindings(settings().shortcuts))
+
+  function runShortcut(action: ShortcutActionId): void {
+    const s = state()
+    const lineId = s.selection.lineId
+    switch (action) {
+      case 'playPause':
+        togglePlay()
+        break
+      case 'seekBack':
+        seekBy(-settings().seekStepSec)
+        break
+      case 'seekForward':
+        seekBy(settings().seekStepSec)
+        break
+      case 'seekBackLarge':
+        seekBy(-settings().bigSeekStepSec)
+        break
+      case 'seekForwardLarge':
+        seekBy(settings().bigSeekStepSec)
+        break
+      case 'seekToStart':
+        ctx.playback.seek(0)
+        updatePlayheadDom()
+        break
+      case 'prevLine':
+      case 'nextLine': {
+        const lines = s.project?.lyrics ?? []
+        const idx = lines.findIndex((l) => l.id === lineId)
+        const nextIdx = action === 'prevLine' ? Math.max(0, idx - 1) : Math.min(lines.length - 1, idx + 1)
+        if (lines[nextIdx]) selectLine(lines[nextIdx].id)
+        break
+      }
+      case 'deselect':
+        selectLine(null)
+        break
+      case 'editLineText':
+        if (lineId) textArea.focus()
+        break
+      case 'deleteLine':
+        deleteSelectedLine()
+        break
+      case 'addLine':
+        addLineBtn.click()
+        break
+      case 'splitLine':
+        splitSelectedAtPlayhead()
+        break
+      case 'mergeLine':
+        mergeSelectedWithNext()
+        break
+      case 'reallocateLine':
+        reallocateBtn.click()
+        break
+      case 'setLineStart':
+      case 'setLineEnd': {
+        if (!lineId) break
+        const t = playheadDisplaySec()
+        const key = action === 'setLineStart' ? 'start' : 'end'
+        ctx.editor.applyAndCommit((lyrics) => lyrics.map((l) => (l.id === lineId ? { ...l, [key]: t } : l)))
+        renderBlocks()
+        break
+      }
+      case 'toggleTapMode':
+        tapModeBtn.click()
+        break
+      case 'tapConfirm':
+        if (s.tapMode) tapConfirmNext()
+        break
+      case 'tapBack':
+        if (s.tapMode) tapBack()
+        break
+      case 'toggleSnap':
+        snapBtn.click()
+        break
+      case 'cycleBeatSnap': {
+        const values = BEAT_SNAP_OPTIONS.map(([v]) => v)
+        const next = values[(values.indexOf(s.beatSnapDivision) + 1) % values.length]
+        setBeatSnapDivision(next)
+        break
+      }
+      case 'toggleGuides':
+        guidesBtn.click()
+        break
+      case 'zoomIn':
+        setZoom(s.zoom * 1.5)
+        break
+      case 'zoomOut':
+        setZoom(s.zoom / 1.5)
+        break
+      case 'zoomFit':
+        zoomFitBtn.click()
+        break
+      case 'speedDown':
+      case 'speedUp': {
+        const idx = SPEED_STEPS.indexOf(s.playbackRate)
+        const base = idx === -1 ? SPEED_STEPS.indexOf(1) : idx
+        const nextIdx = Math.max(0, Math.min(SPEED_STEPS.length - 1, base + (action === 'speedUp' ? 1 : -1)))
+        setPlaybackRate(SPEED_STEPS[nextIdx])
+        break
+      }
+      case 'speedReset':
+        setPlaybackRate(1)
+        break
+      case 'offsetDecrease':
+        adjustOffset(-5)
+        break
+      case 'offsetIncrease':
+        adjustOffset(5)
+        break
+      case 'offsetDecreaseLarge':
+        adjustOffset(-50)
+        break
+      case 'offsetIncreaseLarge':
+        adjustOffset(50)
+        break
+      case 'goToPerform':
+        ctx.navigate('perform')
+        break
+      case 'openSettings':
+        ctx.openSettings()
+        break
+    }
   }
 
   function onKeyDown(e: KeyboardEvent): void {
+    // ツールバーのセレクトボックスを操作した直後はフォーカスが残り、矢印キーで値が変わってしまうので外す
+    if ((e.target as HTMLElement | null)?.tagName === 'SELECT') (e.target as HTMLElement).blur()
+    // 設定画面(ショートカットの割り当て変更中を含む)が開いている間は編集画面の操作をしない
+    if (ctx.ui.getState().settingsOpen) return
     if (isEditableTarget(e.target)) {
       if (e.key === 'Escape') (e.target as HTMLElement).blur()
       return
     }
-    const s = state()
     const meta = e.metaKey || e.ctrlKey
-
-    if (e.code === 'Space') {
+    // Undo/Redoはメニュー(menu.ts)と同じ固定キー。割り当て変更の対象外
+    if (meta && e.key.toLowerCase() === 'z') {
       e.preventDefault()
-      togglePlay()
-      return
-    }
-    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-      e.preventDefault()
-      const step = e.shiftKey ? settings().bigSeekStepSec : settings().seekStepSec
-      seekBy(e.key === 'ArrowLeft' ? -step : step)
-      return
-    }
-    if (e.key === 'Home') {
-      e.preventDefault()
-      ctx.playback.seek(0)
-      updatePlayheadDom()
-      return
-    }
-    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-      e.preventDefault()
-      const lines = s.project?.lyrics ?? []
-      const idx = lines.findIndex((l) => l.id === s.selection.lineId)
-      const nextIdx = e.key === 'ArrowUp' ? Math.max(0, idx - 1) : Math.min(lines.length - 1, idx + 1)
-      if (lines[nextIdx]) selectLine(lines[nextIdx].id)
-      return
-    }
-    if (e.key === 'Delete' || e.key === 'Backspace') {
-      e.preventDefault()
-      deleteSelectedLine()
-      return
-    }
-    if (e.key === 'Escape') {
-      selectLine(null)
-      return
-    }
-    if (e.key === 'Return' || e.key === 'Enter') {
-      if (s.selection.lineId) textArea.focus()
-      return
-    }
-    if (e.key.toLowerCase() === 'i' && s.selection.lineId) {
-      const t = playheadDisplaySec()
-      ctx.editor.applyAndCommit((lyrics) => lyrics.map((l) => (l.id === s.selection.lineId ? { ...l, start: t } : l)))
-      renderBlocks()
-      return
-    }
-    if (e.key.toLowerCase() === 'o' && s.selection.lineId) {
-      const t = playheadDisplaySec()
-      ctx.editor.applyAndCommit((lyrics) => lyrics.map((l) => (l.id === s.selection.lineId ? { ...l, end: t } : l)))
-      renderBlocks()
-      return
-    }
-    if (e.key.toLowerCase() === 't' && s.tapMode) {
-      e.preventDefault()
-      if (e.shiftKey) tapBack()
-      else tapConfirmNext()
-      return
-    }
-    if (meta && e.key.toLowerCase() === 'k') {
-      e.preventDefault()
-      splitSelectedAtPlayhead()
-      return
-    }
-    if (meta && e.key.toLowerCase() === 'j') {
-      e.preventDefault()
-      mergeSelectedWithNext()
-      return
-    }
-    if (meta && !e.shiftKey && e.key.toLowerCase() === 'z') {
-      e.preventDefault()
-      ctx.editor.undo()
+      if (e.shiftKey) ctx.editor.redo()
+      else ctx.editor.undo()
       renderAll()
       return
     }
-    if (meta && e.shiftKey && e.key.toLowerCase() === 'z') {
-      e.preventDefault()
-      ctx.editor.redo()
-      renderAll()
-      return
-    }
-    if (meta && e.key === 'Enter') {
-      e.preventDefault()
-      ctx.navigate('perform')
-      return
-    }
-    if (e.key === '+' || e.key === '=') {
-      setZoom(state().zoom * 1.5)
-      return
-    }
-    if (e.key === '-') {
-      setZoom(state().zoom / 1.5)
-      return
-    }
-    if (e.key === '0') {
-      zoomFitBtn.click()
-      return
-    }
-    if (e.key === ';') {
-      adjustOffset(e.shiftKey ? -50 : -5)
-      return
-    }
-    if (e.key === "'") {
-      adjustOffset(e.shiftKey ? 50 : 5)
-      return
-    }
+    const combo = comboFromEvent(e)
+    if (!combo) return
+    const action = comboLookup.get(combo)
+    if (!action) return
+    e.preventDefault()
+    closeTokenMenu()
+    runShortcut(action)
   }
   document.addEventListener('keydown', onKeyDown)
+
+  // 設定画面でショートカットが変更されたら即座に反映する
+  const unsubSettings = ctx.settings.subscribe(() => {
+    comboLookup = buildComboLookup(resolveBindings(settings().shortcuts))
+    refreshTips()
+    renderSidePanel()
+  })
+  refreshTips()
 
   // ---------- 全体再描画 ----------
   function renderAll(): void {
     title.textContent = state().project?.name ?? ''
+    syncRhythmControls()
     renderRibbon()
     renderBlocks()
     renderBoundary()
@@ -1253,6 +1648,8 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
       dragCleanup?.()
       closeTokenMenu()
       unsubEditor()
+      unsubSettings()
+      ctx.playback.setPlaybackRate(1)
       container.removeChild(root)
     }
   }

@@ -11,6 +11,7 @@ import { createAppContext } from './appContext'
 import { createRouter } from './app'
 import { mountSettingsModal } from './components/settingsModal'
 import { mountLoadingOverlay } from './components/loadingOverlay'
+import { mountTooltip } from './components/tooltip'
 import {
   saveProject,
   backupProject,
@@ -45,6 +46,7 @@ async function bootstrap(): Promise<void> {
   createRouter(root, ctx)
   mountSettingsModal(root, ctx)
   mountLoadingOverlay(root, ctx)
+  mountTooltip(root)
 
   // ネイティブメニュー(menu.ts)からのアクション(§4.9.2 ファイル操作・Undo/Redo と対応)
   window.dokokara.onMenuAction((action) => {

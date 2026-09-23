@@ -4,6 +4,15 @@ import { el } from '../lib/dom'
 import { notifyError } from '../lib/projectActions'
 import { listMicInputDevices, MicPermissionError, startMicPitchDetection, type MicPitchSession } from '../audio/micPitchInput'
 import { runLatencyCalibration } from '../audio/latencyCalibration'
+import {
+  SHORTCUT_ACTIONS,
+  comboFromEvent,
+  findConflict,
+  formatCombo,
+  resolveBindings,
+  type ShortcutActionId,
+  type ShortcutOverrides
+} from '@shared/keybindings'
 
 /**
  * 設定モーダル(§4.2, §3)。いずれの画面からも ⌘, で開ける。
@@ -215,6 +224,124 @@ export function mountSettingsModal(root: HTMLElement, ctx: AppContext): void {
     }
   })
   ytDlpRow.control.append(ytDlpStatus, ytDlpUpdateBtn)
+  // yt-dlpは普段は意識しなくてよい項目なので、YouTube取り込みが失敗した時だけ開く詳細欄に格納する
+  const troubleshooting = el('details', { className: 'settings-details' }, [
+    el('summary', {}, ['トラブル時の設定']),
+    el('p', { className: 'settings-note' }, [
+      'YouTubeからの取り込みが急に失敗するようになった時は、YouTube側の仕様変更の可能性があります。取り込みツール(yt-dlp)を更新してください。'
+    ]),
+    ytDlpRow.row
+  ])
+
+  // --- ショートカットキー(編集画面) ---
+  const shortcutSection = el('div', { className: 'settings-shortcuts' })
+  const shortcutMessage = el('p', { className: 'settings-note settings-shortcut-message' }, [''])
+  const resetAllShortcutsBtn = el('button', { className: 'btn btn-ghost' }, ['すべて既定に戻す'])
+  resetAllShortcutsBtn.addEventListener('click', () => {
+    shortcutMessage.textContent = ''
+    void patchSettings({ shortcuts: {} })
+  })
+  const isMac = navigator.platform.toLowerCase().includes('mac')
+  // 割り当て変更のキー入力待ち状態(どのアクションの何番目の枠か)
+  let capturing: { id: ShortcutActionId; slot: number } | null = null
+
+  function currentBindings(): Record<ShortcutActionId, string[]> {
+    return resolveBindings(ctx.settings.getState().shortcuts)
+  }
+
+  /** 既定値と同じになったアクションは上書きから外し、設定ファイルには変更分だけを残す */
+  function toOverrides(bindings: Record<ShortcutActionId, string[]>): ShortcutOverrides {
+    const overrides: ShortcutOverrides = {}
+    for (const def of SHORTCUT_ACTIONS) {
+      const combos = bindings[def.id]
+      const same = combos.length === def.defaults.length && combos.every((c, i) => c === def.defaults[i])
+      if (!same) overrides[def.id] = combos
+    }
+    return overrides
+  }
+
+  function assignShortcut(id: ShortcutActionId, slot: number, combo: string): void {
+    const bindings = currentBindings()
+    const conflict = findConflict(bindings, combo, id)
+    if (conflict) {
+      bindings[conflict] = bindings[conflict].filter((c) => c !== combo)
+      const label = SHORTCUT_ACTIONS.find((a) => a.id === conflict)?.label ?? conflict
+      shortcutMessage.textContent = `${formatCombo(combo, isMac)} は「${label}」に割り当てられていたので、そちらからは外しました。`
+    } else {
+      shortcutMessage.textContent = ''
+    }
+    const combos = bindings[id].filter((c) => c !== combo)
+    combos.splice(Math.min(slot, combos.length), slot < bindings[id].length ? 1 : 0, combo)
+    bindings[id] = combos.slice(0, 2)
+    void patchSettings({ shortcuts: toOverrides(bindings) })
+  }
+
+  function removeShortcut(id: ShortcutActionId, combo: string): void {
+    const bindings = currentBindings()
+    bindings[id] = bindings[id].filter((c) => c !== combo)
+    shortcutMessage.textContent = ''
+    void patchSettings({ shortcuts: toOverrides(bindings) })
+  }
+
+  function renderShortcuts(): void {
+    const bindings = currentBindings()
+    shortcutSection.replaceChildren()
+    let lastGroup = ''
+    for (const def of SHORTCUT_ACTIONS) {
+      if (def.group !== lastGroup) {
+        shortcutSection.appendChild(el('div', { className: 'settings-shortcut-group' }, [def.group]))
+        lastGroup = def.group
+      }
+      const keys = el('div', { className: 'settings-shortcut-keys' })
+      const combos = bindings[def.id]
+      for (let slot = 0; slot < Math.min(2, combos.length + 1); slot++) {
+        const combo = combos[slot] as string | undefined
+        const isCapturing = capturing?.id === def.id && capturing.slot === slot
+        const chip = el(
+          'button',
+          { className: `settings-key-chip${combo ? '' : ' empty'}${isCapturing ? ' capturing' : ''}` },
+          [isCapturing ? 'キーを押してください…' : combo ? formatCombo(combo, isMac) : '+ 追加']
+        )
+        chip.dataset.tip = isCapturing ? 'Escでキャンセル' : 'クリックして割り当てるキーを押します'
+        chip.addEventListener('click', () => {
+          capturing = isCapturing ? null : { id: def.id, slot }
+          renderShortcuts()
+        })
+        keys.appendChild(chip)
+        if (combo && !isCapturing) {
+          const removeBtn = el('button', { className: 'settings-key-remove' }, ['×'])
+          removeBtn.dataset.tip = 'この割り当てを外す'
+          removeBtn.addEventListener('click', () => removeShortcut(def.id, combo))
+          keys.appendChild(removeBtn)
+        }
+      }
+      shortcutSection.appendChild(
+        el('div', { className: 'settings-shortcut-row' }, [el('span', { className: 'settings-shortcut-label' }, [def.label]), keys])
+      )
+    }
+  }
+
+  // 割り当て待ちの間は、押されたキーを他の処理(Escで設定を閉じる等)より先に横取りする
+  window.addEventListener(
+    'keydown',
+    (e) => {
+      if (!capturing || !ctx.ui.getState().settingsOpen) return
+      e.preventDefault()
+      e.stopPropagation()
+      if (e.key === 'Escape') {
+        capturing = null
+        renderShortcuts()
+        return
+      }
+      const combo = comboFromEvent(e)
+      if (!combo) return
+      const target = capturing
+      capturing = null
+      assignShortcut(target.id, target.slot, combo)
+      renderShortcuts()
+    },
+    true
+  )
 
   body.append(
     dirRow.row,
@@ -229,7 +356,14 @@ export function mountSettingsModal(root: HTMLElement, ctx: AppContext): void {
     guideVocalRow.row,
     micRow.row,
     latencyRow.row,
-    ytDlpRow.row
+    el('h3', { className: 'settings-section-title' }, ['ショートカットキー(編集画面)']),
+    el('p', { className: 'settings-note' }, [
+      'キーの枠をクリックしてから、割り当てたいキーを押してください。1つの操作に2つまで割り当てられます。取り消し(⌘Z / Ctrl+Z)・やり直しは固定です。'
+    ]),
+    shortcutMessage,
+    shortcutSection,
+    el('div', { className: 'settings-shortcut-footer' }, [resetAllShortcutsBtn]),
+    troubleshooting
   )
 
   async function patchSettings(partial: Partial<ReturnType<typeof ctx.settings.getState>>): Promise<void> {
@@ -255,6 +389,7 @@ export function mountSettingsModal(root: HTMLElement, ctx: AppContext): void {
     guideVocalInput.value = String(s.guideVocalVolume)
     guideVocalValueLabel.textContent = `${Math.round(s.guideVocalVolume * 100)}%`
     latencyValueLabel.textContent = `${s.micLatencyCompensationMs}ms`
+    renderShortcuts()
   }
 
   function syncVisibility(): void {
@@ -266,6 +401,8 @@ export function mountSettingsModal(root: HTMLElement, ctx: AppContext): void {
       void startMicPreview()
     } else {
       stopMicPreview()
+      capturing = null
+      shortcutMessage.textContent = ''
     }
   }
 
