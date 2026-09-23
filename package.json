@@ -1,7 +1,7 @@
 {
   "name": "dokokara-karaoke",
   "productName": "どこでもカラオケセット",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "手持ちの楽曲からメロディを自動解析し、自分専用のカラオケコンテンツを作成・再生するデスクトップアプリ",
   "main": "out/main/index.js",
   "author": "haruto",
