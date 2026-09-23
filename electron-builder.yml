@@ -12,24 +12,27 @@ files:
   - package.json
 asarUnpack:
   - "**/*.node"
+# Pythonサイドカー本体(PyTorch等の依存込みで数百MB〜)。asarに入れると起動時に
+# 丸ごと展開されてしまうため、asar外のResources(win:はresources)配下に直接配置する。
+# トップレベルに置くことでmac/win両方のビルドに同じ設定が効く。中身自体はビルドを
+# 実行したOS向けのバイナリになる(scripts/build-python-runtime.mjs / build-media-tools.mjs
+# がnpm run build:mac / build:winの一部として、実行OSに応じた版を事前に生成する。
+# 一方のOSで生成した中身をもう一方のOSへそのまま持ち込んでも動かない点に注意)。
+extraResources:
+  - from: resources/python-runtime
+    to: python-runtime
+  - from: python/sidecar
+    to: python-sidecar
+  - from: resources/models
+    to: models
+  - from: resources/media-tools
+    to: media-tools
 mac:
   target:
     - target: dmg
       arch:
         - arm64
   category: public.app-category.music
-  # Pythonサイドカー本体(PyTorch等の依存込みで数百MB〜)。asarに入れると起動時に
-  # 丸ごと展開されてしまうため、asar外のResources/python-runtime/に直接配置する。
-  # scripts/build-python-runtime.mjs (npm run build:python-runtime) が事前に生成する。
-  extraResources:
-    - from: resources/python-runtime
-      to: python-runtime
-    - from: python/sidecar
-      to: python-sidecar
-    - from: resources/models
-      to: models
-    - from: resources/media-tools
-      to: media-tools
   identity: null
   hardenedRuntime: false
   gatekeeperAssess: false
@@ -50,10 +53,12 @@ mac:
         UTTypeTagSpecification:
           public.filename-extension:
             - dokokara
-# 現状非対応: v3のPythonサイドカーはpython-build-standaloneのmacOS arm64版のみを前提に
-# ビルドしており(scripts/build-python-runtime.mjs)、以下のwin:ターゲット/npm run build:winは
-# 実行してもPythonサイドカーが同梱されず動作しない。設定自体は将来Windows向けPython
-# ランタイムを用意する可能性に備えて残す([[どこカラv3の技術選定]]参照)。
+# 2026-09-23: scripts/build-python-runtime.mjs / build-media-tools.mjs がWindows(win32/x64)にも
+# 対応し、上のextraResourcesもmac/win共通のトップレベル設定にしたため、npm run build:winで
+# Pythonサイドカー同梱のインストーラが作れるようになった。ただし実機(Windows機)でのビルド・
+# 起動確認はまだ行っていない([[どこカラv3の技術選定]]参照)。特にpyopenjtalk・ctc-segmentationは
+# PyPIにWindows向け事前ビルド済みwheelが無くソースからコンパイルされるため、ビルドを実行する
+# Windows機にVisual Studio Build Tools(C++ workload)が必要。
 win:
   target:
     - target: nsis

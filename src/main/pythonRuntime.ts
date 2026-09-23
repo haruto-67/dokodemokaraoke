@@ -17,7 +17,14 @@ export function getPythonRuntimeDir(): string {
   return join(__dirname, '../../resources/python-runtime')
 }
 
+/**
+ * 同梱Pythonの実行ファイルパス。python-build-standaloneのレイアウトがOSごとに違う
+ * (macOSは`bin/python3`、Windowsは直下の`python.exe`。scripts/build-python-runtime.mjs参照)。
+ */
 export function getPythonExecutablePath(): string {
+  if (process.platform === 'win32') {
+    return join(getPythonRuntimeDir(), 'python.exe')
+  }
   return join(getPythonRuntimeDir(), 'bin', 'python3')
 }
 

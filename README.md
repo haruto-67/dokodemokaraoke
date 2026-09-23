@@ -1,10 +1,11 @@
 # どこでもカラオケセット (Dokokara Karaoke Set)
 
-手持ちの楽曲(オンボーカル音源＋オフボーカル音源)からメロディを自動解析し、歌詞とタイミングを結びつけて自分専用のカラオケコンテンツを作成・再生するmacOSデスクトップアプリ。詳細は `カラオケアプリ 要件定義 v2.md` を参照。
+手持ちの楽曲(オンボーカル音源＋オフボーカル音源)からメロディを自動解析し、歌詞とタイミングを結びつけて自分専用のカラオケコンテンツを作成・再生するデスクトップアプリ。詳細は `カラオケアプリ 要件定義 v2.md` を参照。
 
 ## 動作環境
 
-- macOS(Apple Silicon / arm64 のみ)。Intel Mac・Windows・Linux は非対応。
+- macOS(Apple Silicon / arm64)またはWindows(x64)。Intel Mac・Linuxは非対応。
+- Windows版は2026-09-23にビルド設定を追加したのみで、実機(Windows機)での動作確認はまだ行っていない([[どこカラv3の技術選定]]参照)。ビルド・起動して不具合があれば都度直していく前提。
 
 ## 開発
 
@@ -13,8 +14,19 @@ npm install
 npm run dev        # 開発モードで起動
 npm run typecheck  # 型チェック
 npm run test       # 単体テスト(vitest)
-npm run build:mac  # DMGビルド(release/ 以下に出力)
+npm run test:python # Pythonサイドカーの単体テスト(要 npm run build:python-runtime)
+npm run build:mac  # macOS: DMGビルド(release/ 以下に出力)
+npm run build:win  # Windows: NSISインストーラビルド(release/ 以下に出力)
 ```
+
+### Windowsでのビルド前提条件
+
+`npm run build:win`(内部で`npm run build:python-runtime`を実行)は、Pythonサイドカーの依存の一部
+(`pyopenjtalk`, `ctc-segmentation`)がPyPIにWindows向け事前ビルド済みwheelを配布しておらず、その場で
+ネイティブ拡張をソースからコンパイルする。事前に以下が必要:
+
+- [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)(「C++によるデスクトップ開発」ワークロード)
+- [uv](https://docs.astral.sh/uv/getting-started/installation/)(`powershell -c "irm https://astral.sh/uv/install.ps1 | iex"`)
 
 ## 初回起動手順(配布を受け取った方向け)
 

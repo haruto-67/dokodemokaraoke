@@ -16,12 +16,17 @@ export function getMediaToolsDir(): string {
   return join(__dirname, '../../resources/media-tools')
 }
 
+// Windowsではspawn()に渡す実行ファイルが拡張子無しだと解決できないため.exeを付ける
+// (resources/media-tools/の配置もscripts/build-media-tools.mjsでwin32時は.exe付きで
+// ダウンロードしている)。
+const EXE_SUFFIX = process.platform === 'win32' ? '.exe' : ''
+
 export function getYtDlpPath(): string {
-  return join(getMediaToolsDir(), 'yt-dlp')
+  return join(getMediaToolsDir(), `yt-dlp${EXE_SUFFIX}`)
 }
 
 export function getFfmpegPath(): string {
-  return join(getMediaToolsDir(), 'ffmpeg')
+  return join(getMediaToolsDir(), `ffmpeg${EXE_SUFFIX}`)
 }
 
 /**
