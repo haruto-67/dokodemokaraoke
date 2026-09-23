@@ -271,8 +271,10 @@ export function mountSetupScreen(container: HTMLElement, ctx: AppContext): Scree
       if (!file) return
       const ext = '.' + (file.name.split('.').pop() ?? '')
       const data = await file.arrayBuffer()
-      // Electron の File には path プロパティが渡る
-      const path = (file as unknown as { path?: string }).path ?? file.name
+      // Electron 32以降File.pathは廃止されたためwebUtils.getPathForFile()経由で取得する
+      // (以前のfile.pathフォールバックはundefinedになりfile.name(ファイル名のみ)が
+      // 誤って使われてしまう不具合があった。実機で発覚・修正: 2026-09-23)
+      const path = window.dokokara.getPathForFile(file)
       await handleFile(path, file.name, ext, data)
     })
 

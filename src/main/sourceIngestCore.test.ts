@@ -1,7 +1,6 @@
-import { describe, expect, it } from 'vitest'
-import { chmodSync, existsSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { EventEmitter } from 'node:events'
+import { existsSync, writeFileSync } from 'node:fs'
 import {
   classifyYtDlpError,
   runSourceIngest,
@@ -11,64 +10,118 @@ import {
 
 /**
  * 実際のyt-dlp/ffmpeg(resources/media-tools/、npm run build:media-toolsで取得)の代わりに、
- * 同じCLI呼び出し規約(-o <template>で出力先を受け取る/-iと最終引数で入出力する)で
- * 振る舞うNodeスクリプトをその場で書き出して使う。`pythonSidecar.test.ts`と同じ方針で、
- * 重いバイナリの取得無しに「取得→正規化→進捗/エラー/キャンセルの配線」を検証する。
+ * `node:child_process`のspawnをモックして子プロセスのイベント(stdout/stderr/exit)を
+ * 直接シミュレートする。OSのシェル実行に依存する「実行可能なfakeスクリプトファイルを
+ * 書き出して起動する」方式は、Windowsでは shebang 直接実行がサポートされず(spawn EFTYPE)、
+ * .cmdラッパー経由も Node 20.11+/libuvのセキュリティ修正(CVE-2024-27980)により
+ * shell:true 無しでは起動できない(spawn EINVAL)ため、macOS/Linux/Windowsいずれでも
+ * 同じ挙動になるこの方式に置き換えた。
  */
-function writeFakeExecutable(body: string): string {
-  const path = join(tmpdir(), `fake-tool-${Date.now()}-${Math.random().toString(36).slice(2)}.mjs`)
-  writeFileSync(path, `#!/usr/bin/env node\n${body}`)
-  chmodSync(path, 0o755)
-  return path
+
+class FakeChildProcess extends EventEmitter {
+  stdout = new EventEmitter() as EventEmitter & { setEncoding: (enc: string) => void }
+  stderr = new EventEmitter() as EventEmitter & { setEncoding: (enc: string) => void }
+  onKill: (() => void) | null = null
+
+  constructor() {
+    super()
+    this.stdout.setEncoding = () => {}
+    this.stderr.setEncoding = () => {}
+  }
+
+  kill(): void {
+    if (this.onKill) this.onKill()
+    else this.emit('exit', null, 'SIGTERM')
+  }
 }
 
-function writeFakeYtDlp(mode: 'success' | 'private' | 'region' | 'slow-then-success'): string {
-  return writeFakeExecutable(`
-    import { writeFileSync } from 'node:fs'
-    const args = process.argv.slice(2)
-    const outIndex = args.indexOf('-o')
-    const outTemplate = args[outIndex + 1]
-    const outPath = outTemplate.replace('%(ext)s', 'webm')
+type SpawnHandler = (command: string, args: string[]) => FakeChildProcess
 
-    function fail(message) {
-      process.stderr.write(message + '\\n')
-      process.exit(1)
-    }
+let spawnQueue: SpawnHandler[] = []
 
-    async function main() {
-      if (${JSON.stringify(mode)} === 'private') fail('ERROR: Private video. Sign in if you have access.')
-      if (${JSON.stringify(mode)} === 'region') fail('ERROR: This video is not available in your country.')
-      if (${JSON.stringify(mode)} === 'slow-then-success') {
-        process.stdout.write('[download]   0.0% of 1.00MiB\\n')
-        await new Promise((r) => setTimeout(r, 2000))
+vi.mock('node:child_process', () => ({
+  spawn: (command: string, args: string[]) => {
+    const handler = spawnQueue.shift()
+    if (!handler) throw new Error(`unexpected spawn: ${command} ${args.join(' ')}`)
+    return handler(command, args)
+  }
+}))
+
+beforeEach(() => {
+  spawnQueue = []
+})
+
+function ytDlpSuccess(delayMs = 0): SpawnHandler {
+  return (_command, args) => {
+    const child = new FakeChildProcess()
+    setImmediate(() => {
+      const outIndex = args.indexOf('-o')
+      const outTemplate = args[outIndex + 1]
+      const outPath = outTemplate.replace('%(ext)s', 'webm')
+
+      child.stdout.emit('data', '[download]   0.0% of 1.00MiB\n')
+
+      const finish = (): void => {
+        child.stdout.emit('data', '[download]  50.0% of 1.00MiB at 1.00MiB/s ETA 00:01\n')
+        child.stdout.emit('data', '[download] 100.0% of 1.00MiB at 1.00MiB/s ETA 00:00\n')
+        writeFileSync(outPath, 'fake-downloaded-audio')
+        child.emit('exit', 0)
       }
-      process.stdout.write('[download]  50.0% of 1.00MiB at 1.00MiB/s ETA 00:01\\n')
-      process.stdout.write('[download] 100.0% of 1.00MiB at 1.00MiB/s ETA 00:00\\n')
-      writeFileSync(outPath, 'fake-downloaded-audio')
-    }
-    void main()
-  `)
+
+      if (delayMs > 0) {
+        const timer = setTimeout(finish, delayMs)
+        child.onKill = () => {
+          clearTimeout(timer)
+          child.emit('exit', null, 'SIGTERM')
+        }
+      } else {
+        finish()
+      }
+    })
+    return child
+  }
 }
 
-function writeFakeFfmpeg(mode: 'success' | 'fail' = 'success'): string {
-  return writeFakeExecutable(`
-    import { writeFileSync } from 'node:fs'
-    const outPath = process.argv[process.argv.length - 1]
-    if (${JSON.stringify(mode)} === 'fail') {
-      process.stderr.write('ffmpeg: invalid data found when processing input\\n')
-      process.exit(1)
-    }
-    writeFileSync(outPath, 'fake-normalized-wav')
-  `)
+function ytDlpFailure(message: string): SpawnHandler {
+  return () => {
+    const child = new FakeChildProcess()
+    setImmediate(() => {
+      child.stderr.emit('data', message + '\n')
+      child.emit('exit', 1)
+    })
+    return child
+  }
+}
+
+function ffmpegSuccess(): SpawnHandler {
+  return (_command, args) => {
+    const child = new FakeChildProcess()
+    setImmediate(() => {
+      const outPath = args[args.length - 1]
+      writeFileSync(outPath, 'fake-normalized-wav')
+      child.emit('exit', 0)
+    })
+    return child
+  }
+}
+
+function ffmpegFailure(): SpawnHandler {
+  return () => {
+    const child = new FakeChildProcess()
+    setImmediate(() => {
+      child.stderr.emit('data', 'ffmpeg: invalid data found when processing input\n')
+      child.emit('exit', 1)
+    })
+    return child
+  }
 }
 
 describe('runSourceIngest', () => {
   it('yt-dlp→ffmpegの順で実行し、進捗コールバックを経て正規化後のwavパスを返す', async () => {
-    const ytDlpPath = writeFakeYtDlp('success')
-    const ffmpegPath = writeFakeFfmpeg('success')
+    spawnQueue = [ytDlpSuccess(), ffmpegSuccess()]
 
     const progressEvents: { stage: string; progress: number }[] = []
-    const job = runSourceIngest('https://www.youtube.com/watch?v=dummy', { ytDlpPath, ffmpegPath }, (stage, progress) =>
+    const job = runSourceIngest('https://www.youtube.com/watch?v=dummy', { ytDlpPath: 'yt-dlp', ffmpegPath: 'ffmpeg' }, (stage, progress) =>
       progressEvents.push({ stage, progress })
     )
 
@@ -86,39 +139,35 @@ describe('runSourceIngest', () => {
   })
 
   it('非公開動画の場合、private_or_deletedとして分類されたエラーでrejectされる', async () => {
-    const ytDlpPath = writeFakeYtDlp('private')
-    const ffmpegPath = writeFakeFfmpeg('success')
+    spawnQueue = [ytDlpFailure('ERROR: Private video. Sign in if you have access.'), ffmpegSuccess()]
 
-    const job = runSourceIngest('https://www.youtube.com/watch?v=dummy', { ytDlpPath, ffmpegPath }, () => {})
+    const job = runSourceIngest('https://www.youtube.com/watch?v=dummy', { ytDlpPath: 'yt-dlp', ffmpegPath: 'ffmpeg' }, () => {})
 
     await expect(job.result).rejects.toMatchObject({ kind: 'private_or_deleted' })
     await expect(job.result).rejects.toThrow('ローカルファイルの入力をご利用ください')
   })
 
   it('地域/年齢制限の場合、region_or_age_restrictedとして分類される', async () => {
-    const ytDlpPath = writeFakeYtDlp('region')
-    const ffmpegPath = writeFakeFfmpeg('success')
+    spawnQueue = [ytDlpFailure('ERROR: This video is not available in your country.'), ffmpegSuccess()]
 
-    const job = runSourceIngest('https://www.youtube.com/watch?v=dummy', { ytDlpPath, ffmpegPath }, () => {})
+    const job = runSourceIngest('https://www.youtube.com/watch?v=dummy', { ytDlpPath: 'yt-dlp', ffmpegPath: 'ffmpeg' }, () => {})
 
     await expect(job.result).rejects.toMatchObject({ kind: 'region_or_age_restricted' })
   })
 
   it('ffmpegでの正規化に失敗した場合、tool_failureとして分類される', async () => {
-    const ytDlpPath = writeFakeYtDlp('success')
-    const ffmpegPath = writeFakeFfmpeg('fail')
+    spawnQueue = [ytDlpSuccess(), ffmpegFailure()]
 
-    const job = runSourceIngest('https://www.youtube.com/watch?v=dummy', { ytDlpPath, ffmpegPath }, () => {})
+    const job = runSourceIngest('https://www.youtube.com/watch?v=dummy', { ytDlpPath: 'yt-dlp', ffmpegPath: 'ffmpeg' }, () => {})
 
     await expect(job.result).rejects.toMatchObject({ kind: 'tool_failure' })
   })
 
   it('cancel()を呼ぶとSourceIngestCancelledErrorでrejectされる(ダウンロード完了を待たない)', async () => {
-    const ytDlpPath = writeFakeYtDlp('slow-then-success')
-    const ffmpegPath = writeFakeFfmpeg('success')
+    spawnQueue = [ytDlpSuccess(2000), ffmpegSuccess()]
 
-    const job = runSourceIngest('https://www.youtube.com/watch?v=dummy', { ytDlpPath, ffmpegPath }, () => {})
-    // fakeスクリプトが最初の progress を出してから2秒待つ間にキャンセルする
+    const job = runSourceIngest('https://www.youtube.com/watch?v=dummy', { ytDlpPath: 'yt-dlp', ffmpegPath: 'ffmpeg' }, () => {})
+    // 最初の progress を出してから2秒待つ間にキャンセルする
     await new Promise((r) => setTimeout(r, 200))
     job.cancel()
 

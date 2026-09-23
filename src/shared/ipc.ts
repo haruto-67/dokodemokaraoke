@@ -143,6 +143,7 @@ export interface DokokaraApi {
   renameProject(filePath: string, newName: string): Promise<{ filePath: string }>
   trashProject(filePath: string): Promise<void>
   pickAudioFile(): Promise<{ path: string; name: string; ext: string; data: ArrayBuffer } | null>
+  getPathForFile(file: File): string
   readFileBuffer(filePath: string): Promise<ArrayBuffer>
   readTextFile(filePath: string): Promise<string>
   pickTextFile(): Promise<string | null>

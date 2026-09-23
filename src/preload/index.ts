@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import {
   IPC,
   type AnalysisDoneEvent,
@@ -28,6 +28,10 @@ const api: DokokaraApi = {
   renameProject: (filePath: string, newName: string) => ipcRenderer.invoke(IPC.renameProject, filePath, newName),
   trashProject: (filePath: string) => ipcRenderer.invoke(IPC.trashProject, filePath),
   pickAudioFile: () => ipcRenderer.invoke(IPC.pickAudioFile),
+  // Electron 32でFile.pathが廃止されたため、ドラッグ&ドロップされたFileから実パスを
+  // 取得するにはwebUtils.getPathForFile()が必須(古いコードのfile.pathフォールバックは
+  // 常にundefinedになりfile.nameだけが使われてしまう不具合があった)。
+  getPathForFile: (file: File) => webUtils.getPathForFile(file),
   readFileBuffer: (filePath: string) => ipcRenderer.invoke(IPC.readFileBuffer, filePath),
   readTextFile: (filePath: string) => ipcRenderer.invoke(IPC.readTextFile, filePath),
   pickTextFile: () => ipcRenderer.invoke(IPC.pickTextFile),

@@ -52,7 +52,40 @@ function rmrf(target) {
   fs.rmSync(target, { recursive: true, force: true })
 }
 
+// Windows実機で「ウィンドウが白紙のまま何も表示されず、×を押してもプロセスが終了しない」
+// 不具合が発生した(2026-09-23、実機確認)。原因はelectron-builder.yml側の
+// electronFuses.grantFileProtocolExtraPrivileges: false(mac SIGTRAPクラッシュ対策として
+// 全プラットフォーム共通設定していたもの)。このfuseが無効だとfile://オリジンがCORS上
+// null origin扱いになり、Viteが生成するESモジュール(<script type="module">)やCSSの
+// file://読み込みが「Cross origin requests are only supported for protocol schemes: ...」
+// でブロックされ、レンダラのJSが一切実行されずウィンドウが白紙になる(実機で確認・特定)。
+// 白紙になるとレンダラ側の再生前確認(closeConfirmed IPC応答)も動かないため、
+// ウィンドウを閉じてもプロセスが終了しない症状も連動して起きていた。
+// electron-builder.ymlのelectronFusesはプラットフォーム別に上書きできない
+// (app-builder-libのPlatformSpecificBuildOptionsはCommonConfigurationを継承しておらず、
+// win:/mac:配下にelectronFusesを書いても型的に無視される)ため、electron-builderが
+// fuse書き込み後・署名前に呼ぶこのafterSignフックで、Windows版だけこの1本のfuseを
+// 再度trueに焼き直す(mac側のSIGTRAP対策で無効化した他のfuseはそのまま維持する)。
+async function reEnableFileProtocolPrivilegesForWindows(context) {
+  const { flipFuses, FuseVersion, FuseV1Options } = require('@electron/fuses')
+  const entries = fs.readdirSync(context.appOutDir)
+  const exeName = entries.find((name) => name.toLowerCase().endsWith('.exe'))
+  if (!exeName) {
+    throw new Error(`[afterSign] Windows実行ファイル(.exe)が見つかりませんでした: ${context.appOutDir}`)
+  }
+  const exePath = path.join(context.appOutDir, exeName)
+  console.log(`[afterSign] Windows: grantFileProtocolExtraPrivilegesを再度有効化します: ${exePath}`)
+  await flipFuses(exePath, {
+    version: FuseVersion.V1,
+    [FuseV1Options.GrantFileProtocolExtraPrivileges]: true
+  })
+}
+
 module.exports = async function afterSign(context) {
+  if (context.electronPlatformName === 'win32') {
+    await reEnableFileProtocolPrivilegesForWindows(context)
+    return
+  }
   if (context.electronPlatformName !== 'darwin') return
 
   const entries = fs.readdirSync(context.appOutDir)

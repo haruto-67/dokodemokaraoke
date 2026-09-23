@@ -170,6 +170,10 @@ async function main() {
     // シンボリックリンクのため、cpSyncで別ディレクトリへコピーするとリンク切れ(またはtmpDir
     // 削除後に中身が空同然になる)不具合が実機で発生した。renameSyncなら同一ディレクトリ構造を
     // そのまま移動するだけなので、相対シンボリックリンクのターゲットが変わらず問題が起きない。
+    // `resources/`自体はgit管理外(python-runtime/models/media-toolsのみ.gitignore対象、
+    // 親ディレクトリはどのスクリプトも作らない)のため、フレッシュなcloneではまだ存在しない。
+    // 無いとrenameSyncが「移動先の親ディレクトリが無い」でENOENTになる(Windowsで実機確認)。
+    mkdirSync(dirname(RUNTIME_DIR), { recursive: true })
     renameSync(extractedPythonDir, RUNTIME_DIR)
 
     const pythonBin = join(RUNTIME_DIR, ...config.pythonBinRelative)

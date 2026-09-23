@@ -5,9 +5,12 @@
 
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 
-const ROOT = new URL('..', import.meta.url).pathname
+// `new URL('..', import.meta.url).pathname` は Windows で `/C:/...` のような
+// 不正な絶対パス(先頭に余計な`/`が付く)になるため、fileURLToPathを使う。
+const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const RUNTIME_DIR = join(ROOT, 'resources', 'python-runtime')
 const pythonBin = process.platform === 'win32' ? join(RUNTIME_DIR, 'python.exe') : join(RUNTIME_DIR, 'bin', 'python3')
 
