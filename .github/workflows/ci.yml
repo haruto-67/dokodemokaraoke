@@ -17,6 +17,9 @@ jobs:
           node-version: 22
           cache: npm
 
+      # build:python-runtime(build:macの最初の工程)が同梱Pythonへの依存インストールにuvを使う
+      - uses: astral-sh/setup-uv@v6
+
       - run: npm ci
 
       - run: npm run typecheck
