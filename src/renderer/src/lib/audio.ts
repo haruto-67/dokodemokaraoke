@@ -73,6 +73,7 @@ export class PlaybackEngine {
   // stopSourceOnly()が先に呼ばれた場合はこのタイマーを確実に解除し、破棄済みshifterが
   // 遅れてconnectされて音が漏れることを防ぐ。
   private pendingShifterConnectTimeoutIds: ReturnType<typeof setTimeout>[] = []
+  private epoch = 0
 
   constructor() {
     this.audioContext = new AudioContext()
@@ -237,6 +238,7 @@ export class PlaybackEngine {
   }
 
   private stopSourceOnly(): void {
+    this.epoch++
     for (const id of this.pendingShifterConnectTimeoutIds) clearTimeout(id)
     this.pendingShifterConnectTimeoutIds = []
     if (this.source) {
@@ -270,6 +272,20 @@ export class PlaybackEngine {
       this.overlayShifter.disconnect()
       this.overlayShifter = null
     }
+  }
+
+  /**
+   * 曲中の位置songSec(音声の時刻)が鳴るAudioContext時刻。停止中はnull。
+   * 編集画面のメトロノームが、曲の拍に合わせてクリックを先にスケジュールするために使う。
+   */
+  ctxTimeForSongTime(songSec: number): number | null {
+    if (!this.playing) return null
+    return this.startedAtCtxTime + (songSec - this.startOffsetSec) / this.rate
+  }
+
+  /** 再生開始・停止・シーク・速度変更のたびに増える番号。スケジュール済みのクリックを取り消す判定に使う */
+  getPlaybackEpoch(): number {
+    return this.epoch
   }
 
   getCurrentTime(): number {

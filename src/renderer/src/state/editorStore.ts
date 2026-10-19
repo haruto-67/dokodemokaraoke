@@ -36,6 +36,8 @@ export interface EditorState {
   playbackRate: number
   /** リズムスナップの細かさ(1拍あたりの分割数)。0はオフ、1=4分音符、2=8分、3=3連8分、4=16分 */
   beatSnapDivision: number
+  /** 編集画面で再生中に拍ごとのクリック音を鳴らすか */
+  metronomeEnabled: boolean
 }
 
 function emptyAudioState(): EditorAudioState {
@@ -68,11 +70,14 @@ export function createEditorStore() {
     snapEnabled: true,
     tapMode: false,
     playbackRate: 1,
-    beatSnapDivision: 0
+    beatSnapDivision: 0,
+    metronomeEnabled: false
   })
 
   let history = new HistoryManager<DokokaraLine[]>(store.getState().project?.lyrics ?? [])
   let pendingSnapshot: DokokaraLine[] | null = null
+  // テンポ(リズム)は歌詞の履歴(Undo)の対象外だが、変更したら未保存として扱うため保存時点の値を覚えておく
+  let savedRhythmJson = JSON.stringify(store.getState().project?.rhythm ?? null)
 
   function loadProject(
     filePath: string | null,
@@ -93,6 +98,7 @@ export function createEditorStore() {
       playSource: project.playback.defaultSource
     })
     history = new HistoryManager<DokokaraLine[]>(project.lyrics)
+    savedRhythmJson = JSON.stringify(project.rhythm ?? null)
   }
 
   /** ドラッグ開始時など、コミット前の変更を始める前に呼ぶ */
@@ -142,7 +148,10 @@ export function createEditorStore() {
 
   function markSaved(): void {
     const p = store.getState().project
-    if (p) history.markSaved(p.lyrics)
+    if (p) {
+      history.markSaved(p.lyrics)
+      savedRhythmJson = JSON.stringify(p.rhythm ?? null)
+    }
   }
 
   function isDirty(): boolean {
@@ -152,7 +161,7 @@ export function createEditorStore() {
     // 一致してしまい isDirty が false になる。しかし disk上には何も保存されていないため、
     // ここでは常にdirty扱いとし、「ホームへ」等での保存確認を必ず出す。
     if (store.getState().filePath === null) return true
-    return history.isDirty(p.lyrics)
+    return history.isDirty(p.lyrics) || JSON.stringify(p.rhythm ?? null) !== savedRhythmJson
   }
 
   function canUndo(): boolean {

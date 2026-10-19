@@ -5,7 +5,23 @@ import { saveProject, confirmDiscardIfDirty, bufferForSource, notifyError } from
 import { snapTime, nearestGridTime, SNAP_PRIORITY, type SnapTarget } from '../lib/snap'
 import { reallocateRespectingLocks } from '../lib/retiming'
 import { resizeLineTokens } from '../lib/resizeLine'
-import { beatGridTimes, estimateTempo, nearestBeatGridTime, onsetStrengthEnvelope } from '../lib/tempo'
+import { findTokenForEdge, setTokenEdgeAt, type TokenEdge } from '../lib/playheadTiming'
+import {
+  addTempoChange,
+  alignBeatAt,
+  beatGridPoints,
+  bpmAt,
+  estimateTempo,
+  moveSegmentStart,
+  nearestBeatGridTime,
+  normalizeRhythm,
+  nudgeBeatsAt,
+  onsetStrengthEnvelope,
+  removeTempoChange,
+  rhythmSegments,
+  setBpmAt
+} from '../lib/tempo'
+import { scheduleClick } from '../audio/performCues'
 import { buildWaveformPeaks } from '../lib/waveform'
 import {
   buildComboLookup,
@@ -92,6 +108,10 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
   const bpmInput = el('input', { type: 'number', min: '30', max: '300', step: '0.1', className: 'editor-bpm-input' }) as HTMLInputElement
   const bpmEstimateBtn = el('button', { className: 'btn btn-ghost' }, ['BPM推定'])
   const beatAlignBtn = el('button', { className: 'btn btn-ghost' }, ['拍を合わせる'])
+  const beatNudgeBackBtn = el('button', { className: 'btn btn-ghost' }, ['◀'])
+  const beatNudgeFwdBtn = el('button', { className: 'btn btn-ghost' }, ['▶'])
+  const addTempoChangeBtn = el('button', { className: 'btn btn-ghost' }, ['+ テンポ変更'])
+  const metronomeBtn = el('button', { className: 'btn btn-ghost' }, ['メトロノーム'])
   const zoomOutBtn = el('button', { className: 'btn btn-ghost' }, ['−'])
   const zoomFitBtn = el('button', { className: 'btn btn-ghost' }, ['全体表示'])
   const zoomInBtn = el('button', { className: 'btn btn-ghost' }, ['＋'])
@@ -99,6 +119,8 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
   const tapModeBtn = el('button', { className: 'btn btn-ghost' }, ['タップ入力'])
   const offsetLabel = el('span', { className: 'mono editor-offset' }, ['0ms'])
   const reallocateBtn = el('button', { className: 'btn btn-ghost' }, ['この行を再配分'])
+  const tokenStartHereBtn = el('button', { className: 'btn btn-ghost' }, ['文字の開始をここに'])
+  const tokenEndHereBtn = el('button', { className: 'btn btn-ghost' }, ['文字の終了をここに'])
 
   // --- 曲ごとの4カウント/キー提示音のオン/オフ(§4.12) ---
   // オン/オフの2値のみ(「既定」という3つ目の選択肢は分かりにくいという指摘を受けて廃止)。
@@ -115,8 +137,10 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
   toolbar.append(
     group(playBtn, timeLabel, speedSelect, sourceSelect),
     group(zoomOutBtn, zoomFitBtn, zoomInBtn, guidesBtn),
-    group(snapBtn, beatSnapSelect, bpmInput, bpmEstimateBtn, beatAlignBtn),
+    group(snapBtn, beatSnapSelect),
+    group(metronomeBtn, bpmInput, bpmEstimateBtn, beatAlignBtn, beatNudgeBackBtn, beatNudgeFwdBtn, addTempoChangeBtn),
     group(addLineBtn, reallocateBtn, tapModeBtn),
+    group(tokenStartHereBtn, tokenEndHereBtn),
     group(countInLabel, jingleLabel),
     el('span', { className: 'editor-toolbar-spacer' }, []),
     offsetWrap
@@ -142,11 +166,25 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
     ],
     [snapBtn, 'ドラッグ時に再生位置・他の行の端・ガイド線などへ吸着させます。Altキーを押しながらドラッグすると一時的に無効', 'toggleSnap'],
     [beatSnapSelect, 'リズムスナップ: 曲のテンポに合わせた音符単位(4分・8分など)へ吸着させます', 'cycleBeatSnap'],
-    [bpmInput, '曲のテンポ(BPM)。リズムスナップの拍の間隔になります', null],
-    [bpmEstimateBtn, '伴奏の音からBPMと拍の位置を自動で推定します', null],
-    [beatAlignBtn, '拍の線がずれている時に、現在の再生位置を拍の頭として合わせ直します', null],
+    [metronomeBtn, '再生中に拍ごとにクリック音を鳴らします(テンポが変わる位置は高い音)。拍の線も表示します', null],
+    [bpmInput, '再生位置の区間のテンポ(BPM)。途中でテンポを変えた時は、その区間のBPMだけが変わります', null],
+    [bpmEstimateBtn, '伴奏の音からBPMと拍の位置を自動で推定します(途中のテンポ変更はそのまま残します)', null],
+    [beatAlignBtn, '拍の線がずれている時に、現在の再生位置を拍の頭として合わせ直します(再生位置の区間だけ)', null],
+    [beatNudgeBackBtn, '再生位置の区間の拍を10ms早めます(Shiftを押しながらで50ms)。波形上部の♩の札をドラッグしても動かせます', null],
+    [beatNudgeFwdBtn, '再生位置の区間の拍を10ms遅らせます(Shiftを押しながらで50ms)', null],
+    [addTempoChangeBtn, '再生位置からテンポを変えます。波形上部に♩の札が出るので、ドラッグで位置を、BPM欄で速さを変えられます(×で削除)', null],
     [addLineBtn, '再生位置に新しい行を追加します', 'addLine'],
     [reallocateBtn, '選択中の行の文字タイミングを自動で割り振り直します(ロックした文字はそのまま)', 'reallocateLine'],
+    [
+      tokenStartHereBtn,
+      '再生バーが重なっている文字の開始を、再生バーの位置にします(接している前の文字の終わりも一緒に動きます)。文字のすき間では次の文字に効きます',
+      'setTokenStart'
+    ],
+    [
+      tokenEndHereBtn,
+      '再生バーが重なっている文字の終了を、再生バーの位置にします(接している次の文字の始まりも一緒に動きます)。文字のすき間では直前の文字に効きます',
+      'setTokenEnd'
+    ],
     [
       tapModeBtn,
       'タップ入力モード: 曲を再生しながらキーを押すたびに、選択中の行の文字の開始時刻を1文字ずつ確定していきます',
@@ -192,7 +230,11 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
   const blocksLayer = el('div', { className: 'editor-blocks-layer' })
   const boundaryLayer = el('div', { className: 'editor-boundary-layer' })
   const playhead = el('div', { className: 'editor-playhead' })
-  track.append(ribbonSvgWrap, blocksLayer, boundaryLayer, playhead)
+  // テンポの区間の開始を示す札(♩BPM)。ドラッグで拍の開始位置・テンポ変更の位置を動かす
+  const tempoMarkerLayer = el('div', { className: 'editor-tempo-marker-layer' })
+  // 拍の線は波形と別の層に描く(札のドラッグ中に拍の線だけを描き直すため)
+  const beatGridWrap = el('div', { className: 'editor-beat-grid' })
+  track.append(ribbonSvgWrap, beatGridWrap, blocksLayer, boundaryLayer, tempoMarkerLayer, playhead)
   scrollArea.appendChild(track)
   // 手動スクロールで再生バーが画面外に出た時の方向インジケーター(§スクロール)。
   // scrollAreaの外(editor-main直下)に置き、スクロールに追従せずビューポート基準で固定表示する。
@@ -354,25 +396,6 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
         line.setAttribute('opacity', '0.18')
         svg.appendChild(line)
       }
-      // リズムスナップ中は拍グリッドを表示する(拍の頭は濃く、分割線は薄く)
-      const rhythm = s.project?.rhythm
-      if (rhythm && s.beatSnapDivision > 0) {
-        const beatSec = 60 / rhythm.bpm
-        for (const t of beatGridTimes(rhythm, s.beatSnapDivision, 0, totalDurationSec())) {
-          const beatPos = (t - rhythm.firstBeatSec) / beatSec
-          const onBeat = Math.abs(beatPos - Math.round(beatPos)) < 1e-6
-          const line = document.createElementNS(ns, 'line')
-          const x = xForTime(t)
-          line.setAttribute('x1', String(x))
-          line.setAttribute('x2', String(x))
-          line.setAttribute('y1', '0')
-          line.setAttribute('y2', String(RIBBON_HEIGHT))
-          line.setAttribute('stroke', 'var(--color-accent)')
-          line.setAttribute('stroke-width', '1')
-          line.setAttribute('opacity', onBeat ? '0.45' : '0.15')
-          svg.appendChild(line)
-        }
-      }
     }
 
     // ピッチリボン(二層描画: 太いグロー + 細い明色線)
@@ -424,6 +447,8 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
     }
 
     ribbonSvgWrap.appendChild(svg)
+    renderBeatGrid()
+    renderTempoMarkers()
   }
 
   // ---------- 歌詞ブロック描画 ----------
@@ -1192,6 +1217,7 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
     // スクロールできない不具合になっていた(実機で報告)。
     if (ctx.playback.isPlaying()) autoScrollToPlayhead(t)
     updatePlayheadOffscreenIndicator(t)
+    syncShownBpm()
   }
 
   function autoScrollToPlayhead(t: number): void {
@@ -1295,6 +1321,31 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
   })
   syncToggleButtons()
 
+  // ---------- 再生バーの位置で1文字の開始・終了を確定する ----------
+  function setTokenEdgeAtPlayhead(edge: TokenEdge): void {
+    const lines = state().project?.lyrics
+    if (!lines) return
+    const t = playheadDisplaySec()
+    const ref = findTokenForEdge(lines, t, edge)
+    if (!ref) {
+      notifyError(edge === 'start' ? '再生位置より後ろに文字がありません。' : '再生位置より前に文字がありません。')
+      return
+    }
+    const updated = setTokenEdgeAt(lines, ref, edge, t)
+    if (!updated) {
+      notifyError('隣の文字が短すぎるため、この位置には動かせません。')
+      return
+    }
+    ctx.editor.applyAndCommit(() => updated)
+    // 操作した文字を選択して、どの文字が変わったか分かるようにする
+    ctx.editor.store.setState({ selection: { lineId: updated[ref.lineIndex].id, tokenIndex: ref.tokenIndex } })
+    renderBlocks()
+    renderBoundary()
+    renderSidePanel()
+  }
+  tokenStartHereBtn.addEventListener('click', () => setTokenEdgeAtPlayhead('start'))
+  tokenEndHereBtn.addEventListener('click', () => setTokenEdgeAtPlayhead('end'))
+
   // ---------- 再生速度(低速再生での編集用) ----------
   function setPlaybackRate(rate: number): void {
     ctx.editor.store.setState({ playbackRate: rate })
@@ -1305,32 +1356,60 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
   speedSelect.addEventListener('change', () => setPlaybackRate(Number(speedSelect.value)))
   setPlaybackRate(state().playbackRate)
 
-  // ---------- リズムスナップ(曲のテンポに合わせた音符単位への吸着) ----------
+  // ---------- リズム(テンポ・拍の位置・途中のテンポ変更・メトロノーム) ----------
+  /** 拍の線・テンポの札・BPM欄などを出すか(リズムスナップ中かメトロノーム中) */
+  function rhythmVisible(): boolean {
+    const s = state()
+    return s.beatSnapDivision > 0 || s.metronomeEnabled
+  }
   function setRhythm(rhythm: DokokaraRhythm | null): void {
     const p = state().project
     if (!p) return
     ctx.editor.store.setState({ project: { ...p, rhythm } })
     syncRhythmControls()
-    renderRibbon()
+    renderBeatGrid()
+    renderTempoMarkers()
   }
   function setBeatSnapDivision(division: number): void {
     ctx.editor.store.setState({ beatSnapDivision: division })
     // テンポ未設定のままリズムスナップを選んだら、まず自動推定する
     if (division > 0 && !state().project?.rhythm) estimateRhythm()
     syncRhythmControls()
-    renderRibbon()
+    renderBeatGrid()
+    renderTempoMarkers()
   }
+  function setMetronomeEnabled(enabled: boolean): void {
+    ctx.editor.store.setState({ metronomeEnabled: enabled })
+    if (enabled && !state().project?.rhythm) estimateRhythm()
+    if (!enabled) cancelMetronomeClicks()
+    syncRhythmControls()
+    renderBeatGrid()
+    renderTempoMarkers()
+  }
+  let shownBpm: number | null = null
   function syncRhythmControls(): void {
     const s = state()
     const rhythm = s.project?.rhythm ?? null
     beatSnapSelect.value = String(s.beatSnapDivision)
     beatSnapSelect.classList.toggle('active', s.beatSnapDivision > 0)
-    if (document.activeElement !== bpmInput) bpmInput.value = rhythm ? String(rhythm.bpm) : ''
+    metronomeBtn.classList.toggle('active', s.metronomeEnabled)
+    shownBpm = rhythm ? bpmAt(rhythm, playheadDisplaySec()) : null
+    if (document.activeElement !== bpmInput) bpmInput.value = shownBpm !== null ? String(shownBpm) : ''
     bpmInput.placeholder = 'BPM'
-    const on = s.beatSnapDivision > 0
-    bpmInput.style.display = on ? '' : 'none'
-    bpmEstimateBtn.style.display = on ? '' : 'none'
-    beatAlignBtn.style.display = on ? '' : 'none'
+    const on = rhythmVisible()
+    for (const c of [bpmInput, bpmEstimateBtn, beatAlignBtn, beatNudgeBackBtn, beatNudgeFwdBtn, addTempoChangeBtn]) {
+      c.style.display = on ? '' : 'none'
+    }
+  }
+  /** 再生で区間をまたいだらBPM欄の表示を追従させる(毎フレーム呼ばれるので変わった時だけ書き換える) */
+  function syncShownBpm(): void {
+    const rhythm = state().project?.rhythm
+    if (!rhythm || !rhythmVisible() || document.activeElement === bpmInput) return
+    const bpm = bpmAt(rhythm, playheadDisplaySec())
+    if (bpm !== shownBpm) {
+      shownBpm = bpm
+      bpmInput.value = String(bpm)
+    }
   }
   function estimateRhythm(): void {
     const s = state()
@@ -1340,29 +1419,184 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
     const channels: Float32Array[] = []
     for (let i = 0; i < buffer.numberOfChannels; i++) channels.push(buffer.getChannelData(i))
     const { envelope, frameRate } = onsetStrengthEnvelope(channels, buffer.sampleRate)
-    const rhythm = estimateTempo(envelope, frameRate)
-    if (!rhythm) {
+    const estimated = estimateTempo(envelope, frameRate)
+    if (!estimated) {
       notifyError('テンポを推定できませんでした。BPMを直接入力してください。')
       return
     }
-    setRhythm(rhythm)
+    // 途中のテンポ変更は手で付けたものなので残す(推定し直すのは最初の区間だけ)
+    const changes = s.project?.rhythm?.changes
+    setRhythm(normalizeRhythm(changes ? { ...estimated, changes } : estimated))
   }
   beatSnapSelect.addEventListener('change', () => setBeatSnapDivision(Number(beatSnapSelect.value)))
+  metronomeBtn.addEventListener('click', () => setMetronomeEnabled(!state().metronomeEnabled))
   bpmInput.addEventListener('change', () => {
     const bpm = Number(bpmInput.value)
     if (!Number.isFinite(bpm) || bpm < 30 || bpm > 300) {
       syncRhythmControls()
       return
     }
-    setRhythm({ bpm, firstBeatSec: state().project?.rhythm?.firstBeatSec ?? 0 })
+    const rhythm = state().project?.rhythm
+    setRhythm(rhythm ? setBpmAt(rhythm, playheadDisplaySec(), bpm) : { bpm, firstBeatSec: 0 })
   })
   bpmEstimateBtn.addEventListener('click', estimateRhythm)
   beatAlignBtn.addEventListener('click', () => {
     const rhythm = state().project?.rhythm
     if (!rhythm) return
-    setRhythm({ ...rhythm, firstBeatSec: playheadDisplaySec() })
+    setRhythm(normalizeRhythm(alignBeatAt(rhythm, playheadDisplaySec())))
   })
+  function nudgeBeats(e: MouseEvent, direction: 1 | -1): void {
+    const rhythm = state().project?.rhythm
+    if (!rhythm) return
+    const delta = (e.shiftKey ? 0.05 : 0.01) * direction
+    setRhythm(normalizeRhythm(nudgeBeatsAt(rhythm, playheadDisplaySec(), delta)))
+  }
+  beatNudgeBackBtn.addEventListener('click', (e) => nudgeBeats(e, -1))
+  beatNudgeFwdBtn.addEventListener('click', (e) => nudgeBeats(e, 1))
+  addTempoChangeBtn.addEventListener('click', () => {
+    const rhythm = state().project?.rhythm
+    if (!rhythm) return
+    const added = addTempoChange(rhythm, playheadDisplaySec())
+    if (!added) {
+      notifyError('テンポ変更は、最初の拍(♩の札)より後ろで、他のテンポ変更から離れた再生位置に追加できます。')
+      return
+    }
+    setRhythm(normalizeRhythm(added))
+    bpmInput.focus()
+    bpmInput.select()
+  })
+
+  /** 拍の線(リズムスナップ中・メトロノーム中)。拍の頭は濃く、分割線は薄く、テンポが変わる位置は太く */
+  function renderBeatGrid(): void {
+    clear(beatGridWrap)
+    const s = state()
+    const rhythm = s.project?.rhythm
+    if (!rhythm || !rhythmVisible()) return
+    const width = Math.max(1, totalDurationSec() * pps())
+    const ns = 'http://www.w3.org/2000/svg'
+    const svg = document.createElementNS(ns, 'svg')
+    svg.setAttribute('width', String(width))
+    svg.setAttribute('height', String(RIBBON_HEIGHT))
+    const division = s.beatSnapDivision > 0 ? s.beatSnapDivision : 1
+    for (const point of beatGridPoints(rhythm, division, 0, totalDurationSec())) {
+      const line = document.createElementNS(ns, 'line')
+      const x = xForTime(point.time)
+      line.setAttribute('x1', String(x))
+      line.setAttribute('x2', String(x))
+      line.setAttribute('y1', '0')
+      line.setAttribute('y2', String(RIBBON_HEIGHT))
+      line.setAttribute('stroke', 'var(--color-accent)')
+      line.setAttribute('stroke-width', point.segmentStart ? '2' : '1')
+      line.setAttribute('opacity', point.segmentStart ? '0.8' : point.onBeat ? '0.45' : '0.15')
+      svg.appendChild(line)
+    }
+    beatGridWrap.appendChild(svg)
+  }
+
+  /**
+   * テンポの区間の開始に「♩BPM」の札を出す。ドラッグで区間の開始(最初の拍・テンポ変更の位置)を動かし、
+   * テンポ変更の札は×で削除できる。ドラッグ中は札を作り直さず(ポインタを見失うため)、拍の線だけ描き直す。
+   */
+  function renderTempoMarkers(): void {
+    clear(tempoMarkerLayer)
+    const rhythm = state().project?.rhythm
+    if (!rhythm || !rhythmVisible()) return
+    for (const seg of rhythmSegments(rhythm)) {
+      const isFirst = seg.changeIndex === null
+      const chip = el('div', { className: `editor-tempo-marker${isFirst ? ' first' : ''}` }, [
+        el('span', {}, [`♩${seg.bpm}`])
+      ])
+      chip.style.left = `${xForTime(seg.startSec)}px`
+      chip.dataset.tip = isFirst
+        ? '最初の拍。ドラッグで拍の開始位置を動かせます'
+        : 'ここからテンポが変わります。ドラッグで位置を動かせます'
+      if (seg.changeIndex !== null) {
+        const changeIndex = seg.changeIndex
+        const removeBtn = el('button', { className: 'editor-tempo-marker-remove' }, ['×'])
+        removeBtn.dataset.tip = 'このテンポ変更を削除'
+        removeBtn.addEventListener('pointerdown', (e) => e.stopPropagation())
+        removeBtn.addEventListener('click', (e) => {
+          e.stopPropagation()
+          const r = state().project?.rhythm
+          if (r) setRhythm(normalizeRhythm(removeTempoChange(r, changeIndex)))
+        })
+        chip.appendChild(removeBtn)
+      }
+      chip.addEventListener('click', (e) => e.stopPropagation())
+      chip.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return
+        e.preventDefault()
+        e.stopPropagation()
+        const original = state().project?.rhythm
+        if (!original) return
+        const startX = e.clientX
+        const startSec = seg.startSec
+        isDragging = true
+        const onMove = (ev: PointerEvent): void => {
+          const moved = moveSegmentStart(original, seg.changeIndex, startSec + (ev.clientX - startX) / pps())
+          const p = state().project
+          if (!p) return
+          ctx.editor.store.setState({ project: { ...p, rhythm: moved } })
+          const movedSeg = rhythmSegments(moved).find((x) => x.changeIndex === seg.changeIndex)
+          if (movedSeg) chip.style.left = `${xForTime(movedSeg.startSec)}px`
+          renderBeatGrid()
+        }
+        const onUp = (): void => {
+          window.removeEventListener('pointermove', onMove)
+          window.removeEventListener('pointerup', onUp)
+          isDragging = false
+          dragCleanup = null
+          const r = state().project?.rhythm
+          if (r) setRhythm(normalizeRhythm(r))
+        }
+        window.addEventListener('pointermove', onMove)
+        window.addEventListener('pointerup', onUp)
+        dragCleanup = onUp
+      })
+      tempoMarkerLayer.appendChild(chip)
+    }
+  }
   syncRhythmControls()
+
+  // メトロノーム: 再生中、少し先(METRONOME_LOOKAHEAD_SEC)までの拍のクリックを
+  // AudioContextの時刻で予約していく(setIntervalの揺れに左右されず正確な間隔で鳴らすため)。
+  // シーク・停止・速度変更でエンジンの再生番号(epoch)が変わったら、予約済みのクリックを取り消す。
+  const METRONOME_LOOKAHEAD_SEC = 0.2
+  let metronomeClicks: OscillatorNode[] = []
+  let metronomeEpoch = -1
+  let metronomeScheduledUntil = -Infinity
+  function cancelMetronomeClicks(): void {
+    for (const osc of metronomeClicks) osc.disconnect()
+    metronomeClicks = []
+    metronomeScheduledUntil = -Infinity
+  }
+  function metronomeTick(): void {
+    const s = state()
+    const rhythm = s.project?.rhythm
+    const epoch = ctx.playback.getPlaybackEpoch()
+    if (epoch !== metronomeEpoch) {
+      cancelMetronomeClicks()
+      metronomeEpoch = epoch
+    }
+    if (!s.metronomeEnabled || !rhythm || !ctx.playback.isPlaying()) {
+      if (metronomeClicks.length > 0) cancelMetronomeClicks()
+      return
+    }
+    const audioContext = ctx.playback.audioContext
+    const offset = displayOffsetSec()
+    const now = playheadDisplaySec()
+    const until = now + METRONOME_LOOKAHEAD_SEC * ctx.playback.getPlaybackRate()
+    for (const point of beatGridPoints(rhythm, 1, Math.max(now, metronomeScheduledUntil), until)) {
+      if (point.time <= metronomeScheduledUntil + 1e-6) continue
+      const at = ctx.playback.ctxTimeForSongTime(point.time + offset)
+      if (at === null || at < audioContext.currentTime) continue
+      metronomeClicks.push(scheduleClick(audioContext, at, point.segmentStart))
+    }
+    metronomeScheduledUntil = until
+    // 鳴り終わったクリックは取り消し対象から外す
+    if (metronomeClicks.length > 64) metronomeClicks = metronomeClicks.slice(-16)
+  }
+  const metronomeTimer = setInterval(metronomeTick, 25)
 
   // ---------- ズーム ----------
   function setZoom(z: number): void {
@@ -1512,6 +1746,12 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
       case 'reallocateLine':
         reallocateBtn.click()
         break
+      case 'setTokenStart':
+        setTokenEdgeAtPlayhead('start')
+        break
+      case 'setTokenEnd':
+        setTokenEdgeAtPlayhead('end')
+        break
       case 'setLineStart':
       case 'setLineEnd': {
         if (!lineId) break
@@ -1644,6 +1884,8 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
     unmount() {
       disposed = true
       if (rafId !== null) cancelAnimationFrame(rafId)
+      clearInterval(metronomeTimer)
+      cancelMetronomeClicks()
       document.removeEventListener('keydown', onKeyDown)
       dragCleanup?.()
       closeTokenMenu()

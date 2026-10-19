@@ -18,6 +18,8 @@ export type ShortcutActionId =
   | 'reallocateLine'
   | 'setLineStart'
   | 'setLineEnd'
+  | 'setTokenStart'
+  | 'setTokenEnd'
   | 'toggleTapMode'
   | 'tapConfirm'
   | 'tapBack'
@@ -67,6 +69,8 @@ export const SHORTCUT_ACTIONS: ShortcutActionDef[] = [
   { id: 'reallocateLine', label: '選択行の文字タイミングを自動で再配分', group: '行の編集', defaults: ['R'] },
   { id: 'setLineStart', label: '行の開始を再生位置にする', group: 'タイミング入力', defaults: ['I'] },
   { id: 'setLineEnd', label: '行の終了を再生位置にする', group: 'タイミング入力', defaults: ['O'] },
+  { id: 'setTokenStart', label: '再生位置の文字の開始を再生位置にする', group: 'タイミング入力', defaults: ['Shift+I'] },
+  { id: 'setTokenEnd', label: '再生位置の文字の終了を再生位置にする', group: 'タイミング入力', defaults: ['Shift+O'] },
   { id: 'toggleTapMode', label: 'タップ入力モードの切り替え', group: 'タイミング入力', defaults: ['Shift+T'] },
   { id: 'tapConfirm', label: 'タップ入力: 次の文字の開始を確定', group: 'タイミング入力', defaults: ['T'] },
   { id: 'tapBack', label: 'タップ入力: 1文字戻る', group: 'タイミング入力', defaults: ['Shift+Backspace'] },

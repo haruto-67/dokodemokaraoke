@@ -113,6 +113,14 @@ export interface DokokaraRhythm {
   bpm: number
   /** 基準となる拍(1拍目)の時刻(秒)。この時刻から60/bpm秒ごとに拍が並ぶ */
   firstBeatSec: number
+  /** 途中のテンポ変更(atSecから後ろはbpmで拍が並ぶ)。無い既存プロジェクトはundefined */
+  changes?: DokokaraTempoChange[]
+}
+
+export interface DokokaraTempoChange {
+  /** テンポが変わる拍の時刻(秒) */
+  atSec: number
+  bpm: number
 }
 
 export function createEmptyProject(name: string): DokokaraProject {

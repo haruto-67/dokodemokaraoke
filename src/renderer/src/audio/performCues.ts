@@ -17,11 +17,15 @@ export function countInBeatForRemaining(remainingSec: number): number | null {
   return Math.max(1, Math.min(COUNT_IN_CLICK_COUNT, Math.ceil(remainingSec / COUNT_IN_CLICK_INTERVAL_SEC)))
 }
 
-/** メトロノーム的な短いクリック音を、指定したAudioContext時刻(絶対値)に1回鳴らす。 */
-function scheduleClick(audioContext: AudioContext, at: number): void {
+/**
+ * メトロノーム的な短いクリック音を、指定したAudioContext時刻(絶対値)に1回鳴らす。
+ * accentは高い音(編集画面のメトロノームでテンポ変更の位置を示す用)。
+ * 返り値のOscillatorNodeをstop()すれば、まだ鳴っていないクリックを取り消せる。
+ */
+export function scheduleClick(audioContext: AudioContext, at: number, accent = false): OscillatorNode {
   const osc = audioContext.createOscillator()
   osc.type = 'square'
-  osc.frequency.value = 1500
+  osc.frequency.value = accent ? 2200 : 1500
   const gain = audioContext.createGain()
   gain.gain.setValueAtTime(0.25, at)
   gain.gain.exponentialRampToValueAtTime(0.001, at + 0.05)
@@ -29,6 +33,7 @@ function scheduleClick(audioContext: AudioContext, at: number): void {
   gain.connect(audioContext.destination)
   osc.start(at)
   osc.stop(at + 0.06)
+  return osc
 }
 
 /**

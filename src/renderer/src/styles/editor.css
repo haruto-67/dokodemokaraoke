@@ -156,6 +156,62 @@
   display: block;
 }
 
+/* 拍の線(波形の上に重ねる)。クリックは下のタイムラインへ通す */
+.editor-beat-grid {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+}
+
+/* テンポの区間の開始を示す札(♩BPM)。札だけがドラッグを受け付ける */
+.editor-tempo-marker-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 0;
+  pointer-events: none;
+  z-index: 6;
+}
+
+.editor-tempo-marker {
+  position: absolute;
+  top: 2px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 1px 6px;
+  border-radius: 0 var(--radius-input) var(--radius-input) 0;
+  border-left: 2px solid var(--color-accent);
+  background: rgba(242, 183, 5, 0.18);
+  color: var(--color-accent);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: ew-resize;
+  pointer-events: auto;
+  user-select: none;
+}
+
+.editor-tempo-marker.first {
+  background: rgba(242, 183, 5, 0.3);
+}
+
+.editor-tempo-marker-remove {
+  border: none;
+  background: none;
+  color: inherit;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0 0 0 2px;
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+.editor-tempo-marker-remove:hover {
+  opacity: 1;
+}
+
 .editor-blocks-layer,
 .editor-boundary-layer {
   position: absolute;
