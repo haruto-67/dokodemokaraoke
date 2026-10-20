@@ -72,7 +72,7 @@ def main() -> None:
     project = json.loads((project_dir / "project.json").read_text())
     gt = gt_lines(project)[:n_lines]
     z = np.load(cache)
-    feats = Features(ctc_vp=z["ctc_vp"], f0=z["f0"], db=z["db"], frame_feats=z["frame_feats"])
+    feats = Features(ctc_vp=z["ctc_vp"], f0=z["f0"], db=z["db"], frame_feats=z["frame_feats"], attack=z["attack"])
     params = Params()
     n = len(feats.ctc_vp)
     sil = silence_prob(feats.f0, feats.db, n, params)

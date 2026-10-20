@@ -60,7 +60,7 @@ Electron アプリ。3つのプロセスに分かれる。
    - 音量(相対dB、10ms刻み)。F0 は STEP3 のものを使い回す
 2. `align()` — 配置
    - 歌詞 → ひらがな読み → モーラ(`lyrics_to_morae`)。各モーラに「子音(省略可)→母音」の状態
-   - フレームごとの無音確率(F0 の有無+音量、`silence_prob`)、切れ目の手がかり(音量の谷・音程の変わり目・ノート開始、`boundary_cue`/`note_bonus`)、母音のまま大きく音程が跳ぶコスト(`hold_cost`)
+   - フレームごとの無音確率(F0 の有無+音量、`silence_prob`)、切れ目の手がかり(発音の立ち上がり=アタック・音量の谷・音程の変わり目・ノート開始、`attack_cue`/`boundary_cue`/`note_bonus`)、母音のまま大きく音程が跳ぶ・強いアタックを越えるコスト(`hold_cost`/`attack_hold`)。アタックはボーカルの対数メルスペクトルの立ち上がり量(`attack_strength`)
    - `viterbi()` で歌詞の順序を守ったまま曲全体を一括配置。行の間には「歌詞でない声」の状態がある
    - 配置結果を正解ラベルにして母音分類器(MFCC のロジスティック回帰)を学習 → DP をやり直す、を5回(`labels_from_alignment` / `train_and_predict`)
 3. `to_aligned_lines()` — 行ごとの `{start, end, confidence, tokenTimings(モーラごと)}` に整形

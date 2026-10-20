@@ -18,8 +18,8 @@
 - 行の間(曲頭・間奏)には「歌詞でない声」の状態を置き、行の途中の無音は長いほどコストを課す。
   無いと、曲頭や間奏にある声を行の端のモーラが吸い込み、そのモーラだけ数十秒飛んでいた
 - コスト = 発音の不一致(-log確率)
-          - モーラ開始が切れ目の手がかり(音量の谷・音程の変わり目・ノート開始)に乗るボーナス
-          + 母音を保ったまま大きな音程の跳躍を越えるコスト
+          - モーラ開始が切れ目の手がかり(発音の立ち上がり・音量の谷・音程の変わり目・ノート開始)に乗るボーナス
+          + 母音を保ったまま大きな音程の跳躍・強い発音の立ち上がりを越えるコスト
   1モーラが複数ノートにまたがることは許している(小さな音程の変化は越えてもコストが無い)
 
 パラメータの調整・正解データとの比較は python/experiments/(vowel_dp_align.py、eval_alignment.py)で行う。
@@ -73,8 +73,16 @@ class Params:
     filler_cost: float = 1.5  # 行の間(曲頭・間奏を含む)の「歌詞でない声」の状態の1フレームごとのコスト
     filler_entry_cost: float = 5.0  # その状態に入るコスト(短い行頭・行末の音を吸い込ませないため)
     # モーラ開始のボーナス
-    cue_bonus: float = 3.0  # 切れ目の手がかり(音量の谷・音程の変わり目)に乗った時に下げるコスト
+    # 発音の立ち上がり(アタック)を主、音量の谷・音程の変わり目を従にする。音程の変わり目は、しゃくり上げ等で
+    # 文字の途中にも多く出る(ショート2で1秒に約11個)ため、それだけで区切ると1つ前の候補へずれていた。
+    # アタックを加えて正解2曲のモーラの開始の誤差: 0.03秒以内 44%→52%・42%→55%、中央値 0.035→0.028・0.033→0.028秒
+    cue_bonus: float = 1.0  # 切れ目の手がかり(音量の谷・音程の変わり目)に乗った時に下げるコスト
     cue_sigma_sec: float = 0.02
+    attack_bonus: float = 3.0  # アタックに乗った時に下げるコスト(強さ1あたり)
+    attack_sigma_sec: float = 0.02
+    attack_shift_sec: float = 0.02  # 信号のピークは手修正の開始より約20ms早いため、後ろへずらす
+    attack_min: float = 0.2  # 曲の上位1%を1とした強さで、これより弱いピークは使わない(行の境目で前の行の音を奪っていた)
+    attack_hold: float = 1.0  # 母音を保ったまま強いアタックを越えるコスト(強さ1あたり)。大きくすると歌い回しの揺れで切る
     note_bonus: float = 2.0  # ノート開始に乗った時に下げるコスト(手がかりの補助。単独では粗い)
     note_sigma_sec: float = 0.04
     beat_bonus: float = 0.0  # 拍の格子(8分音符等)に乗った時に下げるコスト。格子が渡された時だけ効く
@@ -301,14 +309,46 @@ def boundary_cue(f0: np.ndarray, db: np.ndarray, n_frames: int, params: Params) 
         if voiced[i] and not voiced[i - 1]:
             cue[i] = max(cue[i], 0.5)
     # 少しぼかしてから20msフレームへ
-    sig = params.cue_sigma_sec * fps
+    return _to_frames(_spread(cue, params.cue_sigma_sec * fps), n_frames)
+
+
+def attack_strength(audio: np.ndarray) -> np.ndarray:
+    """発音の立ち上がりの強さ(10ms刻み。RMVPEのF0と同じ刻み)。対数メルスペクトルが20ms前より
+    強くなった量の、帯域の平均(スペクトルフラックス)。子音の破裂・摩擦や、同じ母音の歌い直しで大きくなる。"""
+    import librosa
+
+    s = librosa.feature.melspectrogram(y=audio, sr=SR, n_fft=1024, hop_length=160, n_mels=64, fmax=8000)
+    log_s = np.log(s + 1e-8 * max(s.max(), 1e-12))
+    flux = np.zeros(log_s.shape[1])
+    flux[2:] = np.maximum(log_s[:, 2:] - log_s[:, :-2], 0).mean(0)
+    return flux
+
+
+def attack_cue(attack: np.ndarray, n_frames: int, params: Params) -> np.ndarray:
+    """アタックの局所最大を、曲の上位1%を1とした強さ(0〜1)でぼかして20msフレームへ。"""
+    fps = 100
+    x = np.clip(attack / max(np.percentile(attack, 99), 1e-12), 0, 1)
+    w = 5
+    cue = np.zeros(len(x))
+    for i in range(len(x)):
+        lo, hi = max(0, i - w), min(len(x), i + w + 1)
+        if x[i] >= params.attack_min and x[i] >= x[lo:hi].max():
+            cue[i] = x[i]
+    shift = int(round(params.attack_shift_sec * fps))
+    if shift:
+        cue = np.roll(cue, shift)
+    return _to_frames(_spread(cue, params.attack_sigma_sec * fps), n_frames)
+
+
+def _spread(cue: np.ndarray, sig: float) -> np.ndarray:
+    """各点の値をガウスでぼかす(重なる所は最大を取る)。"""
     r = int(3 * sig)
     spread = np.zeros_like(cue)
     for i in np.nonzero(cue)[0]:
         for d in range(-r, r + 1):
             if 0 <= i + d < len(cue):
                 spread[i + d] = max(spread[i + d], cue[i] * np.exp(-0.5 * (d / sig) ** 2))
-    return _to_frames(spread, n_frames)
+    return spread
 
 
 def note_bonus(n_frames: int, notes: list, params: Params) -> np.ndarray:
@@ -544,6 +584,7 @@ class Features:
     f0: np.ndarray  # RMVPEのF0(Hz、無声は0。10ms刻み)
     db: np.ndarray  # 最大音量からの相対dB(10ms刻み)
     frame_feats: np.ndarray  # 母音分類器の入力(20msフレーム。classifier_features)
+    attack: np.ndarray  # 発音の立ち上がりの強さ(10ms刻み。attack_strength)
 
 
 def compute_features(audio: np.ndarray, f0_100fps: np.ndarray, model_path: Path, params: Params) -> Features:
@@ -557,6 +598,7 @@ def compute_features(audio: np.ndarray, f0_100fps: np.ndarray, model_path: Path,
         f0=np.asarray(f0_100fps[:m], dtype=np.float64),
         db=db[:m],
         frame_feats=classifier_features(mfcc_features(audio, n, params.mfcc_n, params.mfcc_nfft), hidden, params),
+        attack=attack_strength(audio),
     )
 
 
@@ -583,12 +625,14 @@ def align(
     morae = lyrics_to_morae(lyrics_lines)
     n = len(feats.ctc_vp)
     sil = silence_prob(feats.f0, feats.db, n, params)
+    attack = attack_cue(feats.attack, n, params)
     bonus = (
         note_bonus(n, notes, params)
         + params.cue_bonus * boundary_cue(feats.f0, feats.db, n, params)
+        + params.attack_bonus * attack
         + beat_bonus(n, beat_times, params)
     )
-    hold = hold_cost(feats.f0, feats.db, n, params)
+    hold = hold_cost(feats.f0, feats.db, n, params) + params.attack_hold * attack
 
     vowel_p = feats.ctc_vp
     segs, cost = viterbi(morae, vowel_p, sil, bonus, hold, params)

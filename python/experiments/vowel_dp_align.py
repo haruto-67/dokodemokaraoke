@@ -21,7 +21,16 @@ import numpy as np
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "python" / "sidecar"))
 
-from vowel_align import SR, Features, Params, align, compute_features, heard_sounds, to_aligned_lines  # noqa: E402
+from vowel_align import (  # noqa: E402
+    SR,
+    Features,
+    Params,
+    align,
+    attack_strength,
+    compute_features,
+    heard_sounds,
+    to_aligned_lines,
+)
 
 MODEL_PATH = REPO / "resources" / "models" / "japanese-wav2vec2-base-rs35kh.safetensors"
 RMVPE_PATH = REPO / "resources" / "models" / "rmvpe.pt"
@@ -39,15 +48,18 @@ def load_vocal_16k(project_dir: Path) -> np.ndarray:
 
 def load_features(project_dir: Path, cache: Path | None, params: Params) -> Features:
     if cache and cache.exists():
-        z = np.load(cache)
-        return Features(ctc_vp=z["ctc_vp"], f0=z["f0"], db=z["db"], frame_feats=z["frame_feats"])
+        z = dict(np.load(cache))
+        if "attack" not in z:  # アタックを加える前に作ったキャッシュ
+            z["attack"] = attack_strength(load_vocal_16k(project_dir))
+            np.savez(cache, **z)
+        return Features(ctc_vp=z["ctc_vp"], f0=z["f0"], db=z["db"], frame_feats=z["frame_feats"], attack=z["attack"])
     from rmvpe_model import RMVPE
 
     audio = load_vocal_16k(project_dir)
     f0 = RMVPE(str(RMVPE_PATH), device="cpu").infer_from_audio(audio)
     feats = compute_features(audio, f0, MODEL_PATH, params)
     if cache:
-        np.savez(cache, ctc_vp=feats.ctc_vp, f0=feats.f0, db=feats.db, frame_feats=feats.frame_feats)
+        np.savez(cache, ctc_vp=feats.ctc_vp, f0=feats.f0, db=feats.db, frame_feats=feats.frame_feats, attack=feats.attack)
     return feats
 
 

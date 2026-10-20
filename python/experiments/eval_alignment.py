@@ -56,9 +56,12 @@ def pair_morae(gt: list, pred: list) -> list:
 def stats(errs: list) -> dict:
     if not errs:
         return {"n": 0}
-    abs_e = [abs(e) for e in errs]
+    abs_e = sorted(abs(e) for e in errs)
     return {
         "n": len(errs),
+        "median_abs": abs_e[len(abs_e) // 2],
+        "within_03": sum(e <= 0.03 for e in abs_e) / len(errs),
+        "within_10": sum(e <= 0.1 for e in abs_e) / len(errs),
         "mean_abs": sum(abs_e) / len(errs),
         "max_abs": max(abs_e),
         "mean_signed": sum(errs) / len(errs),
@@ -94,10 +97,14 @@ def main() -> None:
         results[name] = evaluate(gt, json.loads(Path(path).read_text())["lyrics"])
 
     fmt = lambda s: f"{s['mean_abs']:.3f} / {s['max_abs']:.3f} / {s['mean_signed']:+.3f}" if s["n"] else "-"
-    print("| 方式 | 行 平均絶対/最大/平均(符号) [秒] | モーラ 平均絶対/最大/平均(符号) [秒] | 対応付けたモーラ数 |")
-    print("|---|---|---|---|")
+    near = lambda s: f"{s['median_abs']:.3f} / {s['within_03']:.0%} / {s['within_10']:.0%}" if s["n"] else "-"
+    print(
+        "| 方式 | 行 平均絶対/最大/平均(符号) [秒] | モーラ 平均絶対/最大/平均(符号) [秒] "
+        "| モーラ 絶対誤差の中央値 [秒] / 0.03秒以内 / 0.1秒以内 | 対応付けたモーラ数 |"
+    )
+    print("|---|---|---|---|---|")
     for name, r in results.items():
-        print(f"| {name} | {fmt(r['line'])} | {fmt(r['mora'])} | {r['mora']['n']}/{r['gt_morae']} |")
+        print(f"| {name} | {fmt(r['line'])} | {fmt(r['mora'])} | {near(r['mora'])} | {r['mora']['n']}/{r['gt_morae']} |")
     if detail:
         names = list(results)
         print()

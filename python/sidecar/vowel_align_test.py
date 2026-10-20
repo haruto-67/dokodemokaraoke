@@ -12,6 +12,7 @@ from vowel_align import (
     Alignment,
     Params,
     _mora_times,
+    attack_cue,
     heard_sounds,
     lyrics_to_morae,
     split_morae,
@@ -73,6 +74,31 @@ class ViterbiTest(unittest.TestCase):
         zeros = np.zeros(len(sil))
         segs, _ = viterbi(lyrics_to_morae(["あい"]), vowel_p, sil, zeros, zeros, Params())
         self.assertEqual(segs[0][0], 208)
+
+
+    def test_same_vowels_are_split_at_the_attack(self):
+        # 「ああ」を a が続く0.6秒に置く。母音だけでは区切りが決まらないため、アタックの所で区切る
+        labels = ["a"] * 10 + ["a"] * 30 + ["a"] * 10
+        sil = np.array([0.98] * 10 + [0.02] * 30 + [0.98] * 10)
+        attack = np.zeros(len(sil))
+        attack[32] = 1.0
+        params = Params()
+        segs, _ = viterbi(
+            lyrics_to_morae(["ああ"]), _onehot(labels), sil, params.attack_bonus * attack, params.attack_hold * attack, params
+        )
+        self.assertEqual(segs[1][0], 32)
+
+
+class AttackCueTest(unittest.TestCase):
+    def test_strong_peaks_are_shifted_and_weak_ones_dropped(self):
+        attack = np.zeros(2000)  # 10ms刻み
+        attack[50:1800:60] = 1.0  # 0.6秒ごとの強いアタック(曲の上位1%)
+        attack[1820] = 0.1  # 上位1%を1とした強さで attack_min 未満
+        params = Params(attack_shift_sec=0.02)
+        cue = attack_cue(attack, 1000, params)
+        self.assertEqual(int(cue[:50].argmax()), 26)  # 0.5秒+0.02秒 → 20msフレームの26
+        self.assertAlmostEqual(cue[26], 1.0)
+        self.assertLess(cue[905:915].max(), 1e-9)
 
 
 class MoraTimesTest(unittest.TestCase):
