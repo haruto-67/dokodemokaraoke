@@ -22,6 +22,11 @@ describe('tokenizeLine', () => {
     expect(tokens.map((t) => t.text)).toEqual(['カー'])
   })
 
+  it('アポストロフィでつながる英単語は1トークンになる', () => {
+    const tokens = tokenizeLine("Let's go I’m here")
+    expect(tokens.map((t) => t.text.trim())).toEqual(["Let's", 'go', 'I’m', 'here'])
+  })
+
   it('撥音(ん)は独立した1トークンになる', () => {
     const tokens = tokenizeLine('こんにちは')
     expect(tokens.map((t) => t.text)).toEqual(['こ', 'ん', 'に', 'ち', 'は'])

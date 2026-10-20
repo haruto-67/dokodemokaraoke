@@ -79,7 +79,8 @@ def handle_analyze(req: dict) -> None:
     import vad
     from rmvpe_model import RMVPE
     from f0_notes import notes_from_f0
-    from vowel_align import align_lyrics_lines
+    import phoneme_align
+    from vowel_align import Params, align_lyrics_lines, attack_marks, attack_strength
 
     vocal_label = "ボーカル/伴奏分離(Mel-Band RoFormer)"
     pitch_label = "F0抽出・ノート化(RMVPE+Basic Pitch)"
@@ -138,14 +139,30 @@ def handle_analyze(req: dict) -> None:
     # 出現するという前提だけに依存する)。F0はSTEP3のRMVPEの出力(10ms刻み)をそのまま使う。
     _send_progress(req_id, "assign", align_label, 0.0, "running")
     try:
-        aligned_lines, heard = align_lyrics_lines(
-            lyrics_lines,
-            vocals_audio.astype("float32"),
-            f0_hz,
-            notes,
-            paths.model_path("japanese-wav2vec2-base-rs35kh.safetensors"),
-            on_progress=lambda fraction: _send_progress(req_id, "assign", align_label, fraction, "running"),
-        )
+        on_progress = lambda fraction: _send_progress(req_id, "assign", align_label, fraction, "running")  # noqa: E731
+        # 英語が主の曲は発音記号(音素認識モデル)で、それ以外は日本語の母音DPで配置する(phoneme_align.py冒頭参照)
+        if phoneme_align.english_ratio(lyrics_lines) >= 0.5:
+            align_method = "phoneme-ctc"
+            attack = attack_strength(vocals_audio.astype("float32"))
+            aligned_lines, heard = phoneme_align.align_lyrics_lines(
+                lyrics_lines,
+                vocals_audio.astype("float32"),
+                f0_hz,
+                paths.model_path(phoneme_align.MODEL_FILENAME),
+                attack=attack,
+                on_progress=on_progress,
+            )
+            attacks = attack_marks(attack, Params())
+        else:
+            align_method = "vowel-dp"
+            aligned_lines, heard, attacks = align_lyrics_lines(
+                lyrics_lines,
+                vocals_audio.astype("float32"),
+                f0_hz,
+                notes,
+                paths.model_path("japanese-wav2vec2-base-rs35kh.safetensors"),
+                on_progress=on_progress,
+            )
     except Exception as exc:  # noqa: BLE001 -- 失敗理由をerrorメッセージとして呼び出し側に伝える境界
         send({"type": "error", "id": req_id, "message": f"歌詞のタイミング付けに失敗しました: {exc}"})
         return
@@ -163,6 +180,8 @@ def handle_analyze(req: dict) -> None:
                 "phraseSegments": phrase_segments,
                 "lyrics": aligned_lines,
                 "heardSounds": heard,
+                "attacks": attacks,
+                "alignMethod": align_method,
             },
         }
     )

@@ -13,9 +13,12 @@ from vowel_align import (
     Params,
     _mora_times,
     attack_cue,
+    attack_marks,
     heard_sounds,
     lyrics_to_morae,
+    pitch_glides,
     split_morae,
+    starts_at_vowel,
     to_aligned_lines,
     viterbi,
 )
@@ -99,6 +102,41 @@ class AttackCueTest(unittest.TestCase):
         self.assertEqual(int(cue[:50].argmax()), 26)  # 0.5秒+0.02秒 → 20msフレームの26
         self.assertAlmostEqual(cue[26], 1.0)
         self.assertLess(cue[905:915].max(), 1e-9)
+
+    def test_marks_list_shifted_peaks_with_strength(self):
+        attack = np.zeros(2000)
+        attack[50:1800:60] = 1.0
+        attack[1820] = 0.1
+        marks = attack_marks(attack, Params(attack_shift_sec=0.02))
+        self.assertEqual(len(marks), 30)  # 弱いピークは含めない
+        self.assertEqual(marks[0], {"time": 0.52, "strength": 1.0})
+
+
+class PitchGlidesTest(unittest.TestCase):
+    @staticmethod
+    def _hz(semitones):
+        return 440 * 2 ** ((np.asarray(semitones, dtype=float) - 69) / 12)
+
+    def test_arrival_of_a_jump_is_where_the_new_pitch_is_reached(self):
+        # 52半音を0.3秒 → 0.1秒かけて59半音へ上がる → 59半音を0.3秒
+        st = np.concatenate([np.full(30, 52.0), np.linspace(52, 59, 11)[1:], np.full(30, 59.0)])
+        glides = pitch_glides(self._hz(st), Params())
+        self.assertEqual(len(glides), 1)
+        begin, arrive, step = glides[0]
+        self.assertAlmostEqual(step, 7.0, delta=0.3)
+        self.assertLessEqual(abs(begin - 30), 2)
+        self.assertLessEqual(abs(arrive - 40), 2)
+
+    def test_vibrato_is_not_a_jump(self):
+        t = np.arange(100) / 100
+        st = 60 + 0.4 * np.sin(2 * np.pi * 6 * t)  # 6Hz・±0.4半音
+        self.assertEqual(pitch_glides(self._hz(st), Params()), [])
+
+
+class StartsAtVowelTest(unittest.TestCase):
+    def test_consonant_morae_start_at_the_vowel(self):
+        morae = lyrics_to_morae(["はなあ"])
+        self.assertEqual([starts_at_vowel(m) for m in morae], [True, True, False])
 
 
 class MoraTimesTest(unittest.TestCase):

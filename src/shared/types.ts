@@ -41,14 +41,26 @@ export interface DokokaraAudioTrack {
 
 export type SeparationMethod = 'melband-roformer'
 export type PitchMethod = 'rmvpe'
-/** 'vowel-dp': 発音成分(母音・子音)のDP(2026-10-20〜)。'wav2vec2-ctc'はそれ以前の方式で作ったプロジェクト */
-export type AlignMethod = 'vowel-dp' | 'wav2vec2-ctc'
+/**
+ * 'vowel-dp': 発音成分(母音・子音)のDP(2026-10-20〜、日本語の曲)。
+ * 'phoneme-ctc': 発音記号の強制アライメント(英語が主の曲)。'wav2vec2-ctc'はそれ以前の方式で作ったプロジェクト
+ */
+export type AlignMethod = 'vowel-dp' | 'phoneme-ctc' | 'wav2vec2-ctc'
 
-/** 解析で聞き取った音の区間。labelは a/i/u/e/o/N(ん)/unvoiced(無声: 子音か息) */
+/**
+ * 解析で聞き取った音の区間。labelは、日本語の曲(vowel-dp)では a/i/u/e/o/N(ん)/unvoiced(無声: 子音か息)、
+ * 英語が主の曲(phoneme-ctc)では発音記号(IPA。例: aɪ, ʃ)
+ */
 export interface DokokaraHeardSound {
   start: number
   end: number
-  label: 'a' | 'i' | 'u' | 'e' | 'o' | 'N' | 'unvoiced'
+  label: string
+}
+
+/** 解析で見つけた発音の立ち上がり(アタック)。strengthは曲の上位1%を1とした強さ(0〜1) */
+export interface DokokaraAttack {
+  time: number
+  strength: number
 }
 
 /**
@@ -107,6 +119,8 @@ export interface DokokaraProject {
     phrases: DokokaraPhrase[]
     /** 聞き取った音の区間(編集画面のタイムラインに表示)。この項目が無い以前のプロジェクトはundefined */
     heardSounds?: DokokaraHeardSound[]
+    /** 発音の立ち上がりの位置(編集画面のタイムラインに表示)。この項目が無い以前のプロジェクトはundefined */
+    attacks?: DokokaraAttack[]
   }
 
   lyrics: DokokaraLine[]

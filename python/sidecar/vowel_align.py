@@ -93,6 +93,13 @@ class Params:
     pitch_window_sec: float = 0.05
     pitch_min_semitone: float = 0.7
     pitch_full_semitone: float = 1.5
+    # 音程の跳躍(しゃくり上げ等で一方向に動き続ける区間)で、新しい高さに着いた所に乗った時に下げるコスト。
+    # 正解では3半音以上の跳躍の60%で、着いた所の±60ms以内にモーラの開始があった(上がり始めは35%)
+    glide_bonus: float = 3.0
+    glide_sigma_sec: float = 0.02
+    glide_min_semitone: float = 1.5
+    glide_full_semitone: float = 4.0  # この段差で強さ1
+    glide_min_velocity: float = 8.0  # 半音/秒。これより速く一方向に動いている所を跳躍とみなす(ビブラートの往復は段差が小さい)
     # 母音を保ったまま大きな音程の跳躍を越えるコスト
     hold_penalty: float = 8.0
     hold_min_semitone: float = 1.5
@@ -114,10 +121,36 @@ class Params:
 
 @dataclass
 class Mora:
-    text: str  # ひらがな(拗音は2文字)
+    """タイミング付けの単位。日本語はモーラ、英語は音節。"""
+
+    text: str  # 日本語はひらがな(拗音は2文字)、英語は音節の音素(ARPAbet、例: "S T R AO NG")
     kind: str  # "V"(母音あり) / "N"(ん) / "Q"(っ) / "R"(ー)
     vowels: tuple  # 一致とみなす母音クラス
     line: int
+    onset: str = ""  # 頭の子音: ""(無し) / "voiced" / "unvoiced"
+    word: Optional[int] = None  # 英単語の音節は同じ単語で同じ番号(結果は単語ごとにまとめる)
+    word_text: str = ""  # 英単語の表記
+
+
+# 英語の母音(ARPAbet)→ 一致とみなす母音クラス。日本語の5母音に無い音は、近い母音を複数許す
+# (曖昧母音 AH は「ア・ウ・オ」のどれにも聞こえる)。二重母音は両方の母音を許す
+_ARPABET_VOWELS = {
+    "AA": ("a", "o"),
+    "AE": ("a", "e"),
+    "AH": ("a", "u", "o"),
+    "AO": ("o", "a"),
+    "AW": ("a", "u"),
+    "AY": ("a", "i"),
+    "EH": ("e",),
+    "ER": ("a", "u", "o"),
+    "EY": ("e", "i"),
+    "IH": ("i", "e"),
+    "IY": ("i",),
+    "OW": ("o", "u"),
+    "OY": ("o", "i"),
+    "UH": ("u", "o"),
+    "UW": ("u",),
+}
 
 
 def split_morae(reading: str) -> List[str]:
@@ -131,46 +164,79 @@ def split_morae(reading: str) -> List[str]:
     return morae
 
 
-def lyrics_to_morae(lines: List[str]) -> List[Mora]:
+def _japanese_morae(text: str, li: int) -> List[Mora]:
     from lyrics_reading import text_to_hiragana_reading
 
     out: List[Mora] = []
-    for li, line in enumerate(lines):
-        prev_vowel: Optional[str] = None
-        for m in split_morae(text_to_hiragana_reading(line)):
-            last = m[-1]
-            if last == "ん":
-                mora = Mora(m, "N", ("N",), li)
-            elif last == "っ":
-                mora = Mora(m, "Q", (), li)
-            elif last == "ー":
-                mora = Mora(m, "R", (prev_vowel,) if prev_vowel else tuple(CLASSES[:5]), li)
+    prev_vowel: Optional[str] = None
+    for m in split_morae(text_to_hiragana_reading(text)):
+        last = m[-1]
+        if last == "ん":
+            mora = Mora(m, "N", ("N",), li)
+        elif last == "っ":
+            mora = Mora(m, "Q", (), li)
+        elif last == "ー":
+            mora = Mora(m, "R", (prev_vowel,) if prev_vowel else tuple(CLASSES[:5]), li)
+        else:
+            v = _VOWEL_OF[last]
+            onset = "" if m[0] in "あいうえお" else "unvoiced" if m[0] in _UNVOICED_ONSET else "voiced"
+            # 「おう」「えい」は歌では「おー」「えー」と伸ばすことが多いため両方を許す
+            if m == "う" and prev_vowel == "o":
+                mora = Mora(m, "V", ("u", "o"), li, onset)
+            elif m == "い" and prev_vowel == "e":
+                mora = Mora(m, "V", ("i", "e"), li, onset)
             else:
-                v = _VOWEL_OF[last]
-                # 「おう」「えい」は歌では「おー」「えー」と伸ばすことが多いため両方を許す
-                if m == "う" and prev_vowel == "o":
-                    mora = Mora(m, "V", ("u", "o"), li)
-                elif m == "い" and prev_vowel == "e":
-                    mora = Mora(m, "V", ("i", "e"), li)
-                else:
-                    mora = Mora(m, "V", (v,), li)
-            out.append(mora)
-            if mora.kind == "V":
-                prev_vowel = _VOWEL_OF[last]
-            elif mora.kind in ("N", "Q"):
-                prev_vowel = None
+                mora = Mora(m, "V", (v,), li, onset)
+        out.append(mora)
+        if mora.kind == "V":
+            prev_vowel = _VOWEL_OF[last]
+        elif mora.kind in ("N", "Q"):
+            prev_vowel = None
+    return out
+
+
+def _english_morae(word: str, li: int, word_id: int) -> List[Mora]:
+    """英単語を音節に分け、音節ごとに1単位にする。末子音に鼻音(m/n/ng)があれば「ん」も許す。"""
+    from english_g2p import NASALS, UNVOICED, word_syllables
+
+    out = []
+    for syl in word_syllables(word):
+        vowels = _ARPABET_VOWELS[syl.nucleus]
+        if any(c in NASALS for c in syl.coda):
+            vowels = vowels + ("N",)
+        onset = "" if not syl.onset else "unvoiced" if syl.onset[0] in UNVOICED else "voiced"
+        out.append(Mora(syl.text, "V", vowels, li, onset, word_id, word))
+    return out
+
+
+def lyrics_to_morae(lines: List[str]) -> List[Mora]:
+    """歌詞行を、日本語はモーラ・英単語は音節の単位にする。"""
+    from english_g2p import WORD_RE
+
+    out: List[Mora] = []
+    word_id = 0
+    for li, line in enumerate(lines):
+        pos = 0
+        for m in WORD_RE.finditer(line):
+            out += _japanese_morae(line[pos : m.start()], li)
+            out += _english_morae(m.group(), li, word_id)
+            word_id += 1
+            pos = m.end()
+        out += _japanese_morae(line[pos:], li)
     return out
 
 
 def has_consonant(m: Mora) -> bool:
-    return m.kind == "V" and m.text[0] not in "あいうえお"
+    return m.kind == "V" and m.onset != ""
 
 
 def starts_at_vowel(m: Mora) -> bool:
-    """無声の子音(k/s/t/h/p)で始まるモーラは、母音の始まり(声が出始める所)を開始とする。
-    手修正後の正解では「つ」「し」がこの位置に置かれていた。有声の子音(m/n/r/g/z/d/b等)は
-    子音そのものが聞こえるため、子音の始まり(音量の谷)を開始とする。"""
-    return m.text[0] in _UNVOICED_ONSET
+    """子音で始まるモーラは、母音の始まりを開始とする。手修正後の正解では無声の子音(k/s/t/h/p)の
+    「つ」「し」がこの位置に置かれていた。有声の子音(m/n/r/g/z/d/b等)は以前は子音の始まり(音量の谷)を
+    開始にしていたが、正解は新しい音の高さに着いた所・アタックの所に置かれ、子音の始まりより平均10ms
+    以上遅かった(花の「な」で、谷の89.30秒に対し正解は89.40秒)。母音の始まりに揃えると、有声の子音の
+    モーラの開始の誤差が0.03秒以内 55%→68%(ショート2)になった。"""
+    return m.onset != ""
 
 
 # ---------------------------------------------------------------- 音響特徴
@@ -312,6 +378,57 @@ def boundary_cue(f0: np.ndarray, db: np.ndarray, n_frames: int, params: Params) 
     return _to_frames(_spread(cue, params.cue_sigma_sec * fps), n_frames)
 
 
+def pitch_glides(f0: np.ndarray, params: Params) -> List[tuple]:
+    """音程が一方向に動き続ける区間(跳躍・しゃくり)を探し、[(始まり, 着いた所, 段差の半音)](10ms刻みの添字)を返す。
+    ビブラートは往復が短く段差が小さいため glide_min_semitone で落ちる。"""
+    st = np.where(f0 > 0, 12 * np.log2(np.maximum(f0, 1) / 440) + 69, np.nan)
+    out: List[tuple] = []
+    voiced = ~np.isnan(st)
+    i, n = 0, len(st)
+    while i < n:
+        if not voiced[i]:
+            i += 1
+            continue
+        # 有声の区間(30ms以下の途切れはつなぐ)
+        a, last, j = i, i, i
+        while j < n and (voiced[j] or j - last <= 3):
+            if voiced[j]:
+                last = j
+            j += 1
+        b, i = last + 1, last + 1
+        if b - a < 8:
+            continue
+        x = st[a:b].copy()
+        idx = np.arange(len(x))
+        ok = ~np.isnan(x)
+        x[~ok] = np.interp(idx[~ok], idx[ok], x[ok])
+        x = np.convolve(np.pad(x, 1, mode="edge"), np.ones(3) / 3, "valid")
+        v = np.gradient(x) * 100
+        sgn = np.where(v > params.glide_min_velocity, 1, np.where(v < -params.glide_min_velocity, -1, 0))
+        k = 0
+        while k < len(x):
+            if sgn[k] == 0:
+                k += 1
+                continue
+            e = k
+            while e + 1 < len(x) and sgn[e + 1] == sgn[k]:
+                e += 1
+            step = x[min(e + 1, len(x) - 1)] - x[max(k - 1, 0)]
+            if abs(step) >= params.glide_min_semitone:
+                out.append((a + k, a + e + 1, float(step)))
+            k = e + 1
+    return out
+
+
+def glide_cue(f0: np.ndarray, n_frames: int, params: Params) -> np.ndarray:
+    """跳躍で新しい高さに着いた所(0〜1。段差が大きいほど強い)を20msフレームへ。"""
+    cue = np.zeros(len(f0))
+    for _, arrive, step in pitch_glides(f0, params):
+        t = min(arrive, len(cue) - 1)
+        cue[t] = max(cue[t], min(1.0, abs(step) / params.glide_full_semitone))
+    return _to_frames(_spread(cue, params.glide_sigma_sec * 100), n_frames)
+
+
 def attack_strength(audio: np.ndarray) -> np.ndarray:
     """発音の立ち上がりの強さ(10ms刻み。RMVPEのF0と同じ刻み)。対数メルスペクトルが20ms前より
     強くなった量の、帯域の平均(スペクトルフラックス)。子音の破裂・摩擦や、同じ母音の歌い直しで大きくなる。"""
@@ -324,20 +441,29 @@ def attack_strength(audio: np.ndarray) -> np.ndarray:
     return flux
 
 
-def attack_cue(attack: np.ndarray, n_frames: int, params: Params) -> np.ndarray:
-    """アタックの局所最大を、曲の上位1%を1とした強さ(0〜1)でぼかして20msフレームへ。"""
-    fps = 100
+def attack_peaks(attack: np.ndarray, params: Params) -> np.ndarray:
+    """アタックの局所最大を、曲の上位1%を1とした強さ(0〜1)で返す(10ms刻み。ピーク以外は0)。
+    信号のピークは手修正の開始より早いため、attack_shift_sec だけ後ろへずらす。"""
     x = np.clip(attack / max(np.percentile(attack, 99), 1e-12), 0, 1)
     w = 5
-    cue = np.zeros(len(x))
+    peaks = np.zeros(len(x))
     for i in range(len(x)):
         lo, hi = max(0, i - w), min(len(x), i + w + 1)
         if x[i] >= params.attack_min and x[i] >= x[lo:hi].max():
-            cue[i] = x[i]
-    shift = int(round(params.attack_shift_sec * fps))
-    if shift:
-        cue = np.roll(cue, shift)
-    return _to_frames(_spread(cue, params.attack_sigma_sec * fps), n_frames)
+            peaks[i] = x[i]
+    shift = int(round(params.attack_shift_sec * 100))
+    return np.roll(peaks, shift) if shift else peaks
+
+
+def attack_cue(attack: np.ndarray, n_frames: int, params: Params) -> np.ndarray:
+    """アタックのピークをぼかして20msフレームへ。"""
+    return _to_frames(_spread(attack_peaks(attack, params), params.attack_sigma_sec * 100), n_frames)
+
+
+def attack_marks(attack: np.ndarray, params: Params) -> List[dict]:
+    """編集画面のタイムラインに出すアタックの位置と強さ(0〜1)。"""
+    peaks = attack_peaks(attack, params)
+    return [{"time": round(i / 100, 3), "strength": round(float(peaks[i]), 2)} for i in np.nonzero(peaks)[0]]
 
 
 def _spread(cue: np.ndarray, sig: float) -> np.ndarray:
@@ -387,7 +513,7 @@ def viterbi(
     - 子音の状態は母音を問わず、無声のフレームを好む。母音だけのモーラと「ん」「ー」「っ」には無い。
       以前はモーラを1状態にしていたため、子音(無声・音量の谷)にも母音の一致を求めることになり、
       子音の部分が無音扱いされて区切りがずれていた(「ま」→「た」のように同じ母音が続く所で顕著)
-    - 無声子音のモーラは子音を必ず通し、開始は母音の始まりとする(starts_at_vowel)
+    - 子音のあるモーラは子音を必ず通し、開始は母音の始まりとする(starts_at_vowel)
     - 母音は最低Lフレーム続ける。同じ母音が続く「らあ」で「ら」を1フレームにして済ませていたため
     遷移: 自己ループ / G_j→C_j,V_j / C_j→V_j / V_j→G_{j+1},C_{j+1},V_{j+1} /
     「ん」「ー」「っ」のモーラkは読み飛ばし可(V_{k-1}→G_{k+1},C_{k+1},V_{k+1})。
@@ -626,10 +752,12 @@ def align(
     n = len(feats.ctc_vp)
     sil = silence_prob(feats.f0, feats.db, n, params)
     attack = attack_cue(feats.attack, n, params)
+    glide = glide_cue(feats.f0, n, params)
     bonus = (
         note_bonus(n, notes, params)
         + params.cue_bonus * boundary_cue(feats.f0, feats.db, n, params)
         + params.attack_bonus * attack
+        + params.glide_bonus * glide
         + beat_bonus(n, beat_times, params)
     )
     hold = hold_cost(feats.f0, feats.db, n, params) + params.attack_hold * attack
@@ -678,6 +806,19 @@ def _line_confidence(morae: List[Mora], segs, idx: List[int], vowel_p: np.ndarra
     return float(np.mean(scores)) if scores else 0.0
 
 
+def _token_timings(morae: List[Mora], idx: List[int], starts, ends) -> List[AlignedReadingToken]:
+    """行のモーラごとの時刻。英単語の音節は単語ごとに1つにまとめる(画面では英単語が1文字の扱いのため)。"""
+    out: List[AlignedReadingToken] = []
+    for j in idx:
+        m = morae[j]
+        if m.word is not None and j > idx[0] and morae[j - 1].word == m.word:
+            out[-1]["end"] = float(ends[j])
+            continue
+        reading = m.word_text if m.word is not None else m.text
+        out.append({"reading": reading, "start": float(starts[j]), "end": float(ends[j])})
+    return out
+
+
 def to_aligned_lines(lyrics_lines: List[str], result: Alignment) -> List[AlignedLine]:
     from lyrics_reading import auto_annotate_ruby
 
@@ -697,9 +838,7 @@ def to_aligned_lines(lyrics_lines: List[str], result: Alignment) -> List[Aligned
                 "start": float(start),
                 "end": float(end),
                 "confidence": _line_confidence(morae, segs, idx, result.vowel_p),
-                "tokenTimings": [
-                    {"reading": morae[j].text, "start": float(starts[j]), "end": float(ends[j])} for j in idx
-                ],
+                "tokenTimings": _token_timings(morae, idx, starts, ends),
             }
         )
         prev_end = end
@@ -740,10 +879,14 @@ def align_lyrics_lines(
     model_path: Path,
     on_progress: Optional[Callable[[float], None]] = None,
 ) -> tuple:
-    """main.pyから呼ぶ入口。(行ごとの結果, 聞き取った音の区間)を返す。"""
+    """main.pyから呼ぶ入口。(行ごとの結果, 聞き取った音の区間, アタックの位置)を返す。"""
     if not lyrics_lines:
-        return [], []
+        return [], [], []
     params = Params()
     feats = compute_features(vocals_16k_mono, f0_100fps, model_path, params)
     result = align(lyrics_lines, feats, notes, params, on_progress)
-    return to_aligned_lines(lyrics_lines, result), heard_sounds(result.vowel_p, result.sil)
+    return (
+        to_aligned_lines(lyrics_lines, result),
+        heard_sounds(result.vowel_p, result.sil),
+        attack_marks(feats.attack, params),
+    )

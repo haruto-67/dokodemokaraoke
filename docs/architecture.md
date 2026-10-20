@@ -40,7 +40,7 @@ Electron アプリ。3つのプロセスに分かれる。
    | 3 | 音程(F0)抽出(RMVPE、10ms刻み) | `rmvpe_model.py` | F0 |
    | 4 | F0 からノート化(Basic Pitch の後処理だけ流用) | `f0_notes.py` | notes、f0.bin(86fps) |
    | 5 | フレーズ区間(Silero VAD)。ガイド線・スナップ用 | `vad.py` | phraseSegments |
-   | 6/7 | 歌詞のタイミング付け(発音成分DP) | `vowel_align.py`(読みは `lyrics_reading.py`) | 行・モーラごとの時刻、聞き取った音 |
+   | 6/7 | 歌詞のタイミング付け。歌詞の半分以上が英語なら発音記号の強制アライメント、それ以外は発音成分DP | `phoneme_align.py` / `vowel_align.py`(読みは `lyrics_reading.py`・`english_g2p.py`) | 行・モーラ(英語は単語)ごとの時刻、聞き取った音、アタックの位置 |
 
 5. **解析中画面に戻って** `finishAnalysis` → `buildLyricsLines`
    - 歌詞行をトークン(表示の1文字。ルビ付きは1モーラ=1トークン)に分ける: `shared/tokenize.ts`
@@ -59,12 +59,25 @@ Electron アプリ。3つのプロセスに分かれる。
    - 母音分類器の入力(`classifier_features`): MFCC と、wav2vec2 の8層目を120ms後ろへずらして軽く混ぜたもの
    - 音量(相対dB、10ms刻み)。F0 は STEP3 のものを使い回す
 2. `align()` — 配置
-   - 歌詞 → ひらがな読み → モーラ(`lyrics_to_morae`)。各モーラに「子音(省略可)→母音」の状態
-   - フレームごとの無音確率(F0 の有無+音量、`silence_prob`)、切れ目の手がかり(発音の立ち上がり=アタック・音量の谷・音程の変わり目・ノート開始、`attack_cue`/`boundary_cue`/`note_bonus`)、母音のまま大きく音程が跳ぶ・強いアタックを越えるコスト(`hold_cost`/`attack_hold`)。アタックはボーカルの対数メルスペクトルの立ち上がり量(`attack_strength`)
+   - 歌詞 → ひらがな読み → モーラ(`lyrics_to_morae`)。各モーラに「子音(省略可)→母音」の状態。子音のあるモーラの開始は母音の始まり(`starts_at_vowel`)
+   - フレームごとの無音確率(F0 の有無+音量、`silence_prob`)、切れ目の手がかり(発音の立ち上がり=アタック・音程の跳躍で新しい高さに着いた所・音量の谷・音程の変わり目・ノート開始、`attack_cue`/`glide_cue`/`boundary_cue`/`note_bonus`)、母音のまま大きく音程が跳ぶ・強いアタックを越えるコスト(`hold_cost`/`attack_hold`)。アタックはボーカルの対数メルスペクトルの立ち上がり量(`attack_strength`)
    - `viterbi()` で歌詞の順序を守ったまま曲全体を一括配置。行の間には「歌詞でない声」の状態がある
    - 配置結果を正解ラベルにして母音分類器(MFCC のロジスティック回帰)を学習 → DP をやり直す、を5回(`labels_from_alignment` / `train_and_predict`)
 3. `to_aligned_lines()` — 行ごとの `{start, end, confidence, tokenTimings(モーラごと)}` に整形
 4. `heard_sounds()` — フレームごとの聞き取り結果(母音の最尤・無声・無音)を区間にまとめる → 編集画面の帯
+5. `attack_marks()` — アタックの位置と強さ → 編集画面の帯の上の縦線
+
+歌詞の中の英単語は `english_g2p.py`(CMU 発音辞書+g2p_en の推定モデル。`sidecar/data/`)で音節に分け、
+1音節を1単位にする(母音は近い日本語の母音を複数許す。例: 曖昧母音は「あ・う・お」)。結果は単語ごとにまとめる。
+
+### 2'. 英語が主の曲(`python/sidecar/phoneme_align.py`)
+
+母音5種への置き換えでは英語の決め手にならないため、多言語の音素認識モデル
+(facebook/wav2vec2-xlsr-53-espeak-cv-ft を半精度にしたもの)の出力に、歌詞の発音記号(IPA)の並びを
+曲全体で CTC の強制アライメントする(`forced_align`)。英単語は `english_g2p.py` の ARPAbet を IPA へ、
+日本語はかな読みを IPA へ変換する(`lyrics_units`)。単位(英語は単語、日本語はモーラ)の開始は最初の音素が出るフレームを、
+±0.1秒以内のアタックへ寄せたもの(`snap_to_attacks`。行の最初の単位は後ろへだけ)。
+聞き取った音の帯には、モデルが聞き取った発音記号をそのまま出す(`heard_phonemes`)。
 
 パラメータは `Params`(ファイル先頭)。調整は `python/experiments/` で行う(下記)。
 
@@ -173,11 +186,14 @@ Electron アプリ。3つのプロセスに分かれる。
 | `sidecar/f0_notes.py` | F0 → ノート |
 | `sidecar/vad.py` | フレーズ区間検出 |
 | `sidecar/vowel_align.py` | 歌詞のタイミング付け(発音成分DP)と聞き取った音 |
+| `sidecar/phoneme_align.py` | 英語が主の曲の歌詞のタイミング付け(発音記号の強制アライメント) |
+| `sidecar/english_g2p.py` / `sidecar/data/` | 英単語→発音記号・音節(CMU 発音辞書、g2p_en の推定モデルとライセンス) |
 | `sidecar/lyrics_reading.py` | 歌詞→ひらがな読み、自動ルビ、wav2vec2 の読み込みと語彙 |
 | `sidecar/paths.py` | 同梱モデルのパス |
 | `sidecar/*_test.py` | テスト(`npm run test:python`) |
 | `experiments/vowel_dp_align.py` | `vowel_align.py` を展開済みプロジェクトに対して実行(パラメータ調整用) |
-| `experiments/eval_alignment.py` | 結果を手修正済みの正解プロジェクトと比べて誤差を出す |
+| `experiments/phoneme_ctc_align.py` | `phoneme_align.py` を展開済みプロジェクトに対して実行 |
+| `experiments/eval_alignment.py` | 結果を手修正済みの正解プロジェクトと比べて誤差を出す(英語は単語ごと) |
 | `experiments/vowel_accuracy.py` | 母音の聞き取り(フレームごと)の正解率を正解プロジェクトで測る |
 
 ## テストとビルド

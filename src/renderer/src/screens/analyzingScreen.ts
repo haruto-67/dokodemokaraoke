@@ -294,6 +294,8 @@ export function mountAnalyzingScreen(container: HTMLElement, ctx: AppContext): S
     project.analysis.notes = result.notes
     project.analysis.phrases = result.phraseSegments
     project.analysis.heardSounds = result.heardSounds ?? []
+    project.analysis.attacks = result.attacks ?? []
+    project.analysis.alignMethod = result.alignMethod ?? 'vowel-dp'
     project.analysis.frameCount = f0Hz.length
     project.lyrics = buildLyricsLines(lyricsLines, result.lyrics, result.notes, f0Hz)
     // 伴奏からテンポを推定し(編集画面のBPM推定と同じ処理)、テンポが曲の途中でも保たれている時だけ

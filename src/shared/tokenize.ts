@@ -9,6 +9,7 @@ export interface Token {
 const SMALL_KANA = new Set(['ゃ', 'ゅ', 'ょ', 'ぁ', 'ぃ', 'ぅ', 'ぇ', 'ぉ', 'ャ', 'ュ', 'ョ', 'ァ', 'ィ', 'ゥ', 'ェ', 'ォ'])
 const SOKUON = new Set(['っ', 'ッ'])
 const CHOON = new Set(['ー'])
+const APOSTROPHES = new Set(["'", '’'])
 
 function isDigit(ch: string): boolean {
   return /[0-9]/.test(ch)
@@ -36,9 +37,13 @@ function tokenizePlainTextInto(text: string, tokens: Token[]): void {
     }
 
     if (isAsciiLetter(ch)) {
-      // 英単語は1トークン(文字単位に割らない)
+      // 英単語は1トークン(文字単位に割らない)。Let's / I’m のようにアポストロフィでつながる語も1つ
       let j = i + 1
-      while (j < text.length && isAsciiLetter(text[j])) j++
+      while (
+        j < text.length &&
+        (isAsciiLetter(text[j]) || (APOSTROPHES.has(text[j]) && j + 1 < text.length && isAsciiLetter(text[j + 1])))
+      )
+        j++
       tokens.push({ text: text.slice(i, j), ruby: null })
       i = j
       continue

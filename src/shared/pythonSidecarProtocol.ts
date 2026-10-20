@@ -1,4 +1,4 @@
-import type { AnalysisStepProgress, DokokaraHeardSound, DokokaraNote, DokokaraPhrase } from './types'
+import type { AlignMethod, AnalysisStepProgress, DokokaraAttack, DokokaraHeardSound, DokokaraNote, DokokaraPhrase } from './types'
 
 /**
  * メインプロセス ⇔ Pythonサイドカー間の通信プロトコル(§8.2)。
@@ -49,6 +49,10 @@ export interface AnalyzeSidecarResult {
   lyrics: AnalyzeSidecarLine[]
   /** 聞き取った音(母音・ん・無声)の区間。編集画面のタイムラインに表示する */
   heardSounds?: DokokaraHeardSound[]
+  /** 発音の立ち上がり(アタック)の位置。歌詞の区切りの手がかりに使ったもの */
+  attacks?: DokokaraAttack[]
+  /** 使った歌詞タイミング付けの方式(英語が主の曲は'phoneme-ctc')。無い時は'vowel-dp' */
+  alignMethod?: AlignMethod
 }
 
 /** サイドカー → メイン(stdout) */

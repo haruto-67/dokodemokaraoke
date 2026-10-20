@@ -52,7 +52,7 @@ const RIBBON_HEIGHT = 110
 // リボンの下端に出す「聞き取った音」の帯の高さ
 const HEARD_BAND_HEIGHT = 14
 // 聞き取った音の表示(母音は色相を分け、無声は灰色の「・」)
-const HEARD_SOUND_STYLE: Record<DokokaraHeardSound['label'], { text: string; color: string }> = {
+const HEARD_SOUND_STYLE: Record<string, { text: string; color: string }> = {
   a: { text: 'あ', color: '#ff6b6b' },
   i: { text: 'い', color: '#ffd166' },
   u: { text: 'う', color: '#06d6a0' },
@@ -61,6 +61,27 @@ const HEARD_SOUND_STYLE: Record<DokokaraHeardSound['label'], { text: string; col
   N: { text: 'ん', color: '#f78fb3' },
   unvoiced: { text: '・', color: '#9e9e9e' }
 }
+// 発音記号(英語が主の曲)の母音を、上の母音の色に寄せるための対応(記号の最初の母音で決める)
+const IPA_VOWEL_GROUPS: [string, string][] = [
+  ['aɑɐæʌä', 'a'],
+  ['iɪyɨ', 'i'],
+  ['uʊɯʉ', 'u'],
+  ['eɛøœəɚɜ', 'e'],
+  ['oɔɒɵ', 'o']
+]
+
+/** 聞き取った音の表示。発音記号はそのまま出し、母音は近い母音の色、子音は灰色にする */
+function heardSoundStyle(label: DokokaraHeardSound['label']): { text: string; color: string } {
+  const known = HEARD_SOUND_STYLE[label]
+  if (known) return known
+  for (const ch of label) {
+    const group = IPA_VOWEL_GROUPS.find(([chars]) => chars.includes(ch))
+    if (group) return { text: label, color: HEARD_SOUND_STYLE[group[1]].color }
+  }
+  return { text: label, color: HEARD_SOUND_STYLE.unvoiced.color }
+}
+// アタックの印(帯の上に立てる縦線)の最大の高さ
+const ATTACK_MARK_MAX_HEIGHT = 12
 const BLOCK_HEIGHT = 40
 const BOUNDARY_HEIGHT = 36
 const EDGE_GRAB_PX = 6
@@ -435,7 +456,7 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
       rect.setAttribute('y', String(bandY))
       rect.setAttribute('width', w.toFixed(1))
       rect.setAttribute('height', String(HEARD_BAND_HEIGHT))
-      rect.setAttribute('fill', HEARD_SOUND_STYLE[h.label].color)
+      rect.setAttribute('fill', heardSoundStyle(h.label).color)
       rect.setAttribute('opacity', '0.35')
       svg.appendChild(rect)
       if (w >= 9) {
@@ -445,9 +466,22 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
         text.setAttribute('text-anchor', 'middle')
         text.setAttribute('font-size', '10')
         text.setAttribute('fill', 'var(--color-text)')
-        text.textContent = HEARD_SOUND_STYLE[h.label].text
+        text.textContent = heardSoundStyle(h.label).text
         svg.appendChild(text)
       }
+    }
+    // 発音の立ち上がり(アタック)。帯の上に、強いほど高い縦線で出す(歌詞の区切りの手がかりにしたもの)
+    for (const a of s.project?.analysis.attacks ?? []) {
+      const x = xForTime(a.time)
+      const line = document.createElementNS(ns, 'line')
+      line.setAttribute('x1', x.toFixed(1))
+      line.setAttribute('x2', x.toFixed(1))
+      line.setAttribute('y1', String(bandY))
+      line.setAttribute('y2', (bandY - ATTACK_MARK_MAX_HEIGHT * a.strength).toFixed(1))
+      line.setAttribute('stroke', 'var(--color-text)')
+      line.setAttribute('stroke-width', '1.5')
+      line.setAttribute('opacity', '0.6')
+      svg.appendChild(line)
     }
 
     // ピッチリボン(二層描画: 太いグロー + 細い明色線)

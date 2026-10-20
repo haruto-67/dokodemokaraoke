@@ -9,6 +9,7 @@
 """
 
 import difflib
+import re
 import json
 import sys
 from pathlib import Path
@@ -18,6 +19,8 @@ _KANA_EXTRA = set("んっー")
 
 
 def _norm(reading: str) -> str:
+    if _is_word(reading):
+        return _word(reading)
     return reading.strip().translate(_SAME_SOUND)
 
 
@@ -26,7 +29,18 @@ def _is_mora(reading: str) -> bool:
     return bool(r) and all("ぁ" <= c <= "ゖ" or c in _KANA_EXTRA for c in r)
 
 
+def _word(text: str) -> str:
+    return re.sub("[^a-z]", "", text.lower())
+
+
+def _is_word(reading: str) -> bool:
+    """英単語(記号が付いていてもよい)。"""
+    return bool(re.search("[A-Za-z]", reading)) and all(c.isascii() or c in "’—" for c in reading.strip())
+
+
 def gt_lines(project: dict) -> list:
+    """正解の行ごとの開始と、モーラ(英語は単語)ごとの開始。
+    英語の「Let's」は画面で「Let'」「s」の2文字に分かれていることがあるため、1語にまとめる。"""
     out = []
     for line in project["lyrics"]:
         morae = []
@@ -34,6 +48,12 @@ def gt_lines(project: dict) -> list:
             reading = (t["ruby"] if t["ruby"] is not None else t["text"]).strip()
             if _is_mora(reading):
                 morae.append({"reading": reading, "start": t["start"]})
+            elif _is_word(reading):
+                prev = morae[-1]["reading"] if morae else ""
+                if _is_word(prev) and prev.rstrip().endswith(("'", "’")):
+                    morae[-1]["reading"] = prev + reading
+                else:
+                    morae.append({"reading": reading, "start": t["start"]})
         out.append({"text": line["text"], "start": line["start"], "morae": morae})
     return out
 
@@ -41,7 +61,7 @@ def gt_lines(project: dict) -> list:
 def pair_morae(gt: list, pred: list) -> list:
     """同じ行の正解モーラと予測モーラを対応付ける。数が同じなら順番どおり、
     違えば読みの一致で対応付ける(一致しない区間は長さが同じ時だけ順番どおり)。"""
-    pred = [p for p in pred if _is_mora(p["reading"])]
+    pred = [p for p in pred if _is_mora(p["reading"]) or _is_word(p["reading"])]
     if len(gt) == len(pred):
         return list(zip(gt, pred))
     a = [_norm(g["reading"]) for g in gt]
