@@ -81,10 +81,20 @@ export function onsetStrengthEnvelope(
   return { envelope, frameRate }
 }
 
+/** 半拍後の立ち上がりが拍とほぼ同じ強さなら、半拍も拍として刻まれている(倍のテンポ)とみなす */
+const DOUBLE_TEMPO_RATIO = 0.65
+/** 1拍おきの拍が、強い方の拍に比べてこれより弱ければ、半分のテンポとみなす */
+const HALF_TEMPO_RATIO = 0.35
+/** 倍・半分に直した後のBPMの範囲 */
+const OCTAVE_MIN_BPM = 40
+const OCTAVE_MAX_BPM = 240
+
 /**
  * オンセット強度の自己相関からBPMを、櫛形の重ね合わせから拍の位相を推定する。
  * - 1〜4拍分のラグの相関を合算する: 倍/半分のテンポを取り違えにくくなり、長いラグほどBPMの分解能も上がる。
  * - ラグはフレーム単位の小数になるので線形補間で評価する(整数に丸めるとBPMが数%ずれる)。
+ * - 自己相関だけでは倍・半分のテンポを区別できないため、最後に拍と半拍後の強さを比べて直す
+ *   (188BPMの曲を94BPM、68BPMの曲を136BPMと推定していた)。
  * 推定できなければnull(無音・短すぎる等)。
  */
 export function estimateTempo(envelope: Float32Array, frameRate: number, minBpm = 70, maxBpm = 180): Rhythm | null {
@@ -135,19 +145,42 @@ export function estimateTempo(envelope: Float32Array, frameRate: number, minBpm 
     const frac = pos - lo
     return envelope[lo] * (1 - frac) + envelope[lo + 1] * frac
   }
-  const period = 60 / bestBpm
   const durationSec = n / frameRate
+  /** phaseから周期periodで並ぶ位置の強度の合計 */
+  const comb = (period: number, phase: number): number => {
+    let score = 0
+    for (let t = phase; t < durationSec; t += period) score += envAt(t)
+    return score
+  }
+  let bpm = bestBpm
+  let period = 60 / bpm
   let bestPhase = 0
   let bestPhaseScore = -Infinity
   for (let phase = 0; phase < period; phase += 0.005) {
-    let score = 0
-    for (let t = phase; t < durationSec; t += period) score += envAt(t)
+    const score = comb(period, phase)
     if (score > bestPhaseScore) {
       bestPhaseScore = score
       bestPhase = phase
     }
   }
-  return { bpm: Math.round(bestBpm * 10) / 10, firstBeatSec: Math.round(bestPhase * 1000) / 1000 }
+
+  // 倍のテンポ: 半拍後にも拍と同じくらい強い立ち上がりがある。拍の位置はそのまま(元の拍は倍のテンポの拍に含まれる)
+  let doubled = false
+  while (bpm * 2 <= OCTAVE_MAX_BPM && comb(period, bestPhase + period / 2) >= DOUBLE_TEMPO_RATIO * comb(period, bestPhase)) {
+    bpm *= 2
+    period /= 2
+    doubled = true
+  }
+  // 半分のテンポ: 1拍おきの拍だけが強い。強い方の拍を残す
+  while (!doubled && bpm / 2 >= OCTAVE_MIN_BPM) {
+    const a = comb(period * 2, bestPhase)
+    const b = comb(period * 2, bestPhase + period)
+    if (Math.min(a, b) >= HALF_TEMPO_RATIO * Math.max(a, b)) break
+    if (b > a) bestPhase += period
+    bpm /= 2
+    period *= 2
+  }
+  return { bpm: Math.round(bpm * 10) / 10, firstBeatSec: Math.round(bestPhase * 1000) / 1000 }
 }
 
 export interface BeatGridPoint {

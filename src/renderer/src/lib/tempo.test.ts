@@ -53,6 +53,23 @@ describe('estimateTempo', () => {
     expect(Math.abs(r!.bpm - 100)).toBeLessThanOrEqual(1)
   })
 
+  it('半拍後にも拍と同じ強さの音があれば倍のテンポにする(94BPMの表と裏 → 188BPM)', () => {
+    const buffer = clickTrack(188, 0.1, 30)
+    const { frameRate, envelope } = onsetStrengthEnvelope([buffer], 22050)
+    const r = estimateTempo(envelope, frameRate)
+    expect(r).not.toBeNull()
+    expect(Math.abs(r!.bpm - 188)).toBeLessThanOrEqual(1)
+  })
+
+  it('1拍おきにしか音が無ければ半分のテンポにする(探索範囲より遅い60BPM)', () => {
+    const buffer = clickTrack(60, 0.3, 30)
+    const { frameRate, envelope } = onsetStrengthEnvelope([buffer], 22050)
+    const r = estimateTempo(envelope, frameRate)
+    expect(r).not.toBeNull()
+    expect(Math.abs(r!.bpm - 60)).toBeLessThanOrEqual(1)
+    expect(Math.abs(r!.firstBeatSec - 0.3)).toBeLessThanOrEqual(0.03)
+  })
+
   it('短すぎる音声ではnullを返す', () => {
     expect(estimateTempo(new Float32Array(10), 43)).toBeNull()
   })
