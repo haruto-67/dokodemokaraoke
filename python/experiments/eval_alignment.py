@@ -4,7 +4,8 @@
 (vowel_dp_align.py / run_current_method.py の出力)。行単位・モーラ単位の開始時刻の誤差
 (予測-正解。負なら早すぎ)の平均絶対値・最大・平均(符号付き)を出す。
 
-使い方: python3 eval_alignment.py <展開済み正解プロジェクト> 名前1=<結果1.json> [名前2=<結果2.json> ...] [--detail]
+使い方: python3 eval_alignment.py <展開済み正解プロジェクト> 名前1=<結果1.json> [名前2=<結果2.json> ...] [--detail] [--lines=N]
+--lines=N を付けると先頭N行だけを評価する(正解を途中の行までしか手編集していない時用)。
 """
 
 import difflib
@@ -84,8 +85,9 @@ def evaluate(gt: list, pred_lines: list) -> dict:
 def main() -> None:
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     detail = "--detail" in sys.argv
+    n_lines = next((int(a.split("=", 1)[1]) for a in sys.argv if a.startswith("--lines=")), None)
     project = json.loads((Path(args[0]) / "project.json").read_text())
-    gt = gt_lines(project)
+    gt = gt_lines(project)[:n_lines]
     results = {}
     for spec in args[1:]:
         name, path = spec.split("=", 1)

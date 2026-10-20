@@ -15,6 +15,8 @@ Nestioナレッジ「どこカラ 発音成分アライメント案」の検証�
 - 歌詞はpyopenjtalk(ルビ優先、lyrics_align.text_to_hiragana_reading)のモーラ読みを
   同じクラスに落とす。「ん」「ー」「っ」は前の音にくっつく(長さ0で読み飛ばす)ことも許す
 - 各モーラは「子音(省略可)→母音」の状態で表し、歌詞の順序を守ったまま曲全体を1回のViterbiで配置する
+- 行の間(曲頭・間奏)には「歌詞でない声」の状態を置き、行の途中の無音は長いほどコストを課す。
+  無いと、曲頭や間奏にある声を行の端のモーラが吸い込み、そのモーラだけ数十秒飛んでいた
 - コスト = 発音の不一致(-log確率)
           - モーラ開始が切れ目の手がかり(音量の谷・音程の変わり目・ノート開始)に乗るボーナス
           + 母音を保ったまま大きな音程の跳躍を越えるコスト
@@ -73,6 +75,9 @@ class Params:
     label_skip_head: float = 0.3  # ラベル化でモーラの母音の先頭から除く割合(子音からの遷移部分)
     # 無音
     silence_db: float = -40.0  # 最大音量からの相対dB。これより小さく、F0も無いと無音
+    voiced_min_db: float = -40.0  # F0があってもこれより小さい音量なら有声とみなさない(間奏中の残響・漏れ込み)
+    filler_cost: float = 1.5  # 行の間(曲頭・間奏を含む)の「歌詞でない声」の状態の1フレームごとのコスト
+    filler_entry_cost: float = 5.0  # その状態に入るコスト(短い行頭・行末の音を吸い込ませないため)
     # モーラ開始のボーナス
     cue_bonus: float = 3.0  # 切れ目の手がかり(音量の谷・音程の変わり目)に乗った時に下げるコスト
     cue_sigma_sec: float = 0.02
@@ -91,6 +96,7 @@ class Params:
     hold_min_db: float = -15.0  # 跳躍の後の声量がこれより小さい(語尾の減衰)時は対象外
     # DPの状態
     gap_entry_cost: float = 1.5  # 行の途中で無音(息継ぎ)を挟むコスト。行の間は0
+    gap_frame_cost: float = 0.1  # 行の途中の無音を1フレーム伸ばすごとのコスト(1行の中に長い空白を作らせない)
     unvoiced_in_mora: float = 0.15  # 母音の状態での無声フレーム(息・かすれ)の許容度
     cons_base: float = 0.2  # 子音の状態の放出確率(有声フレーム)
     cons_unvoiced: float = 0.4  # 子音の状態で無声フレームに上乗せする確率
@@ -256,8 +262,8 @@ def silence_prob(f0: np.ndarray, db: np.ndarray, n_frames: int, params: Params) 
     """F0(RMVPE)と音量から各フレームの無音確率を出す。
     F0あり→ほぼ有声。F0なしでも音量がある区間は、無声子音とも息継ぎとも決められないため
     中間値(0.5)にする(以前は0.1にしていたため、息継ぎの区間にモーラが入り込んでいた)。"""
-    voiced = _to_frames((f0 > 0).astype(float), n_frames) > 0
     fdb = _to_frames(db, n_frames)
+    voiced = (_to_frames((f0 > 0).astype(float), n_frames) > 0) & (fdb > params.voiced_min_db)
     quiet = 1 / (1 + np.exp(-(params.silence_db - fdb) / 3.0))
     return np.where(voiced, 0.02, 0.5 + 0.48 * quiet)
 
@@ -361,7 +367,11 @@ def viterbi(
     J = len(morae)
     L = max(1, params.min_vowel_frames)
     B = 2 + L  # 1モーラあたりの状態数
-    S = B * J + 1
+    # 行の間(曲頭・曲末を含む)の G_j には、歌詞でない声(前奏の声・間奏の漏れ込みなど)を受ける状態 F_j を添える。
+    # これが無いと、そうした声を近くのモーラが吸い込み、そのモーラが行の外へ大きく飛ぶ
+    between = [j for j in range(J + 1) if j == 0 or j == J or morae[j].line != morae[j - 1].line]
+    F = {j: B * J + 1 + k for k, j in enumerate(between)}
+    S = B * J + 1 + len(between)
     T = len(sil)
     floor = params.prob_floor
     G = lambda j: B * j
@@ -373,6 +383,8 @@ def viterbi(
     emit = np.full((T, S), INF)
     for j in range(J + 1):
         emit[:, G(j)] = -np.log(np.maximum(sil, floor))
+        if 0 < j < J and morae[j].line == morae[j - 1].line:
+            emit[:, G(j)] += params.gap_frame_cost
     cons = params.cons_base + params.cons_unvoiced * np.minimum(1.0, 2 * sil)
     for j, m in enumerate(morae):
         if m.kind == "Q":
@@ -383,6 +395,7 @@ def viterbi(
         emit[:, V1(j) : V(j) + 1] = -np.log(np.maximum(p, floor))[:, None]
         if has_consonant(m):
             emit[:, C(j)] = -np.log(cons) + params.cons_loop_cost
+    emit[:, list(F.values())] = params.filler_cost
 
     skippable = [m.kind in ("N", "Q", "R") for m in morae]
     # 遷移元の一覧: (遷移元, 固定コスト, モーラ開始か)
@@ -395,9 +408,13 @@ def viterbi(
             prev_vs.append(V(j - 2))
         same_line = 0 < j < J and morae[j].line == morae[j - 1].line
         preds[G(j)] = [(G(j), 0.0, False)] + [(v, params.gap_entry_cost if same_line else 0.0, False) for v in prev_vs]
+        if j in F:
+            fe = params.filler_entry_cost
+            preds[F[j]] = [(F[j], 0.0, False), (G(j), fe, False)] + [(v, fe, False) for v in prev_vs]
+            preds[G(j)].append((F[j], 0.0, False))
         if j == J:
             break
-        starts = [(G(j), 0.0, True)] + [(v, 0.0, True) for v in prev_vs]
+        starts = [(G(j), 0.0, True)] + [(v, 0.0, True) for v in prev_vs] + ([(F[j], 0.0, True)] if j in F else [])
         for i in range(1, L):
             preds[V1(j) + i] = [(V1(j) + i - 1, 0.0, False)]
         if L > 1:
@@ -422,6 +439,7 @@ def viterbi(
 
     score = np.full(S, INF)
     score[G(0)] = emit[0, G(0)]
+    score[F[0]] = params.filler_entry_cost + emit[0, F[0]]
     if J:
         if has_consonant(morae[0]):
             score[C(0)] = emit[0, C(0)] - bonus[0]
@@ -434,7 +452,7 @@ def viterbi(
         score = cand[np.arange(S), best] + emit[t]
         back[t] = best
 
-    final = [G(J), V(J - 1)] if J else [G(J)]
+    final = [G(J), F[J], V(J - 1)] if J else [G(J), F[J]]
     state = min(final, key=lambda k: score[k])
     total = float(score[state])
     path = np.empty(T, int)
