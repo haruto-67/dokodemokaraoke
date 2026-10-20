@@ -31,7 +31,7 @@
     },
     {
       "filename": "wav2vec2-xlsr-53-espeak-cv-ft.f16.safetensors",
-      "description": "英語が主の曲の歌詞タイミング付け用 多言語の音素認識wav2vec2 (facebook/wav2vec2-xlsr-53-espeak-cv-ft, Apache-2.0)。半精度にし、設定と語彙をメタデータに入れたもの",
+      "description": "英語が主の曲の歌詞タイミング付け用 多言語の音素認識wav2vec2 (facebook/wav2vec2-xlsr-53-espeak-cv-ft, Apache-2.0)。半精度にし、設定と語彙をメタデータに入れたもの。アプリには同梱せず、初めて英語の曲を解析する時にアプリがダウンロードする",
       "url": "https://github.com/haruto-67/dokodemokaraoke/releases/download/model-weights-v1/wav2vec2-xlsr-53-espeak-cv-ft.f16.safetensors",
       "size": 631737096,
       "sha256": "4599fc82129a5467b04735507651b939043a9a2ac02a1a8b109eb83d42e9f277"

@@ -64,3 +64,11 @@ export function getModelsDir(): string {
   }
   return join(__dirname, '../../resources/models')
 }
+
+/**
+ * 同梱しないモデル重み(英語用の音素認識モデル。DMGがGitHubリリースの1ファイルの上限を超えるため)を、
+ * 初めて使う時にダウンロードして置くディレクトリ。Python側(paths.ensure_downloaded_model)が使う。
+ */
+export function getDownloadedModelsDir(): string {
+  return join(app.getPath('userData'), 'models')
+}

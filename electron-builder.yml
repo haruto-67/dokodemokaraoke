@@ -25,6 +25,11 @@ extraResources:
     to: python-sidecar
   - from: resources/models
     to: models
+    # 英語用の音素認識モデル(約630MB)は同梱しない。入れるとDMGがGitHubリリースの1ファイルの上限(2GiB)を
+    # 超えるため。初めて英語の曲を解析する時にダウンロードする(python/sidecar/paths.py)
+    filter:
+      - "**/*"
+      - "!wav2vec2-xlsr-53-espeak-cv-ft.f16.safetensors"
   - from: resources/media-tools
     to: media-tools
 mac:

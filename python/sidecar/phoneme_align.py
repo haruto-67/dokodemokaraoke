@@ -24,6 +24,11 @@ import numpy as np
 from vowel_align import FRAME_SEC, HOP, SR, AlignedLine, AlignedReadingToken, HeardSound, Params, attack_peaks, lyrics_to_morae
 
 MODEL_FILENAME = "wav2vec2-xlsr-53-espeak-cv-ft.f16.safetensors"
+# アプリには同梱せず、初めて英語の曲を解析する時にダウンロードする(paths.ensure_downloaded_model)。
+# python/models.json の同じモデルの項目と一致させる(phoneme_align_test で確かめる)
+MODEL_URL = "https://github.com/haruto-67/dokodemokaraoke/releases/download/model-weights-v1/" + MODEL_FILENAME
+MODEL_SHA256 = "4599fc82129a5467b04735507651b939043a9a2ac02a1a8b109eb83d42e9f277"
+MODEL_SIZE = 631737096
 
 # 単位の開始を寄せるアタックの範囲(秒)・最小の強さ・近さの重み(ガウスの幅、秒)
 SNAP_WINDOW_SEC = 0.1

@@ -73,7 +73,8 @@ Electron アプリ。3つのプロセスに分かれる。
 ### 2'. 英語が主の曲(`python/sidecar/phoneme_align.py`)
 
 母音5種への置き換えでは英語の決め手にならないため、多言語の音素認識モデル
-(facebook/wav2vec2-xlsr-53-espeak-cv-ft を半精度にしたもの)の出力に、歌詞の発音記号(IPA)の並びを
+(facebook/wav2vec2-xlsr-53-espeak-cv-ft を半精度にしたもの。約630MBでアプリには同梱せず、初めて英語の曲を解析する時に
+GitHub Releases の model-weights-v1 からユーザーデータのフォルダへダウンロードする: `paths.ensure_downloaded_model`)の出力に、歌詞の発音記号(IPA)の並びを
 曲全体で CTC の強制アライメントする(`forced_align`)。英単語は `english_g2p.py` の ARPAbet を IPA へ、
 日本語はかな読みを IPA へ変換する(`lyrics_units`)。単位(英語は単語、日本語はモーラ)の開始は最初の音素が出るフレームを、
 ±0.1秒以内のアタックへ寄せたもの(`snap_to_attacks`。行の最初の単位は後ろへだけ)。

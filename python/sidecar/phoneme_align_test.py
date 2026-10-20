@@ -1,9 +1,12 @@
 """phoneme_align.pyの純粋ロジック部分のテスト(モデルは使わない)。"""
 
+import json
 import unittest
+from pathlib import Path
 
 import numpy as np
 
+import phoneme_align
 from phoneme_align import english_ratio, forced_align, heard_phonemes, lyrics_units, mora_to_ipa, snap_to_attacks
 from vowel_align import Params
 
@@ -83,6 +86,15 @@ class SnapToAttacksTest(unittest.TestCase):
             np.array([1.0, 2.0]), np.array([1.5, 2.5]), attack, Params(attack_shift_sec=0.0), np.array([True, True])
         )
         self.assertEqual([round(x, 2) for x in out], [1.0, 2.05])
+
+
+class ModelManifestTest(unittest.TestCase):
+    def test_download_info_matches_models_json(self):
+        manifest = Path(__file__).resolve().parents[1] / "models.json"
+        entry = next(m for m in json.loads(manifest.read_text())["models"] if m["filename"] == phoneme_align.MODEL_FILENAME)
+        self.assertEqual(entry["url"], phoneme_align.MODEL_URL)
+        self.assertEqual(entry["sha256"], phoneme_align.MODEL_SHA256)
+        self.assertEqual(entry["size"], phoneme_align.MODEL_SIZE)
 
 
 if __name__ == "__main__":

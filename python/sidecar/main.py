@@ -143,12 +143,23 @@ def handle_analyze(req: dict) -> None:
         # 英語が主の曲は発音記号(音素認識モデル)で、それ以外は日本語の母音DPで配置する(phoneme_align.py冒頭参照)
         if phoneme_align.english_ratio(lyrics_lines) >= 0.5:
             align_method = "phoneme-ctc"
+            mb = 1024 * 1024
+            model_file = paths.ensure_downloaded_model(
+                phoneme_align.MODEL_FILENAME,
+                phoneme_align.MODEL_URL,
+                phoneme_align.MODEL_SHA256,
+                phoneme_align.MODEL_SIZE,
+                on_progress=lambda got, total: _send_progress(
+                    req_id, "assign", align_label, 0.0, "running",
+                    f"英語用のモデルをダウンロード中(初回のみ) {got // mb} / {total // mb} MB",
+                ),
+            )
             attack = attack_strength(vocals_audio.astype("float32"))
             aligned_lines, heard = phoneme_align.align_lyrics_lines(
                 lyrics_lines,
                 vocals_audio.astype("float32"),
                 f0_hz,
-                paths.model_path(phoneme_align.MODEL_FILENAME),
+                model_file,
                 attack=attack,
                 on_progress=on_progress,
             )

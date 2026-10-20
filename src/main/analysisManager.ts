@@ -13,17 +13,19 @@ import {
 } from '../shared/ipc'
 import type { AnalyzeSidecarResult } from '../shared/pythonSidecarProtocol'
 import { PythonSidecar } from './pythonSidecar'
-import { getModelsDir, getPythonExecutablePath, getPythonSidecarScriptPath } from './pythonRuntime'
+import { getDownloadedModelsDir, getModelsDir, getPythonExecutablePath, getPythonSidecarScriptPath } from './pythonRuntime'
 import { normalizeAudioToWav } from './mediaTools'
 
 /**
  * サイドカーに渡す環境変数。ライブラリ既定のキャッシュ(~/.cache/huggingface等)や
  * Hugging Face Hubへの問い合わせを一切行わせず、同梱パスのみを参照させる
- * (§5 オフライン動作要件)。
+ * (§5 オフライン動作要件)。例外は同梱しない英語用のモデルで、初めて使う時だけ
+ * このリポジトリのGitHub Releasesからダウンロードする(getDownloadedModelsDir)。
  */
 function buildSidecarEnv(): Record<string, string> {
   return {
     DOKOKARA_MODELS_DIR: getModelsDir(),
+    DOKOKARA_DOWNLOADED_MODELS_DIR: getDownloadedModelsDir(),
     HF_HUB_OFFLINE: '1',
     TRANSFORMERS_OFFLINE: '1',
     HF_HUB_DISABLE_TELEMETRY: '1'
