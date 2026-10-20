@@ -11,7 +11,7 @@
 // 入力(ダウンロードするpython-build-standaloneのバージョン・sha256)が変わらない限り、
 // 2回目以降の実行は既存のstampファイルを見て早期終了する。
 //
-// 注意(Windows): python/requirements.txt の pyopenjtalk・ctc-segmentation は
+// 注意(Windows): python/requirements.txt の pyopenjtalk は
 // PyPIに事前ビルド済みwheelが無くソース配布のみのため、このスクリプト実行時に
 // その場でネイティブ拡張がコンパイルされる。事前に「Desktop development with C++」
 // ワークロードを含むVisual Studio Build Tools(https://visualstudio.microsoft.com/visual-cpp-build-tools/)
@@ -187,9 +187,9 @@ async function main() {
     console.log('動作確認中...')
     run(pythonBin, [
       '-c',
-      'import torch, torchaudio, transformers, basic_pitch, mel_band_roformer, ctc_segmentation, numpy; ' +
+      'import torch, torchaudio, transformers, basic_pitch, mel_band_roformer, sklearn, numpy; ' +
         'print(f"torch={torch.__version__} torchaudio={torchaudio.__version__} transformers={transformers.__version__} ' +
-        'basic_pitch=OK mel_band_roformer={mel_band_roformer.__version__} ctc_segmentation=OK numpy={numpy.__version__}")'
+        'basic_pitch=OK mel_band_roformer={mel_band_roformer.__version__} sklearn={sklearn.__version__} numpy={numpy.__version__}")'
     ])
 
     console.log('pyopenjtalkの辞書を取得中(初回importの副作用。以降はsite-packages内に永続化される)...')

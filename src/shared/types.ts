@@ -41,7 +41,15 @@ export interface DokokaraAudioTrack {
 
 export type SeparationMethod = 'melband-roformer'
 export type PitchMethod = 'rmvpe'
-export type AlignMethod = 'wav2vec2-ctc'
+/** 'vowel-dp': 発音成分(母音・子音)のDP(2026-10-20〜)。'wav2vec2-ctc'はそれ以前の方式で作ったプロジェクト */
+export type AlignMethod = 'vowel-dp' | 'wav2vec2-ctc'
+
+/** 解析で聞き取った音の区間。labelは a/i/u/e/o/N(ん)/unvoiced(無声: 子音か息) */
+export interface DokokaraHeardSound {
+  start: number
+  end: number
+  label: 'a' | 'i' | 'u' | 'e' | 'o' | 'N' | 'unvoiced'
+}
 
 /**
  * 本番/編集画面で再生する音源の種類(§4.10「音声パターン」)。
@@ -97,6 +105,8 @@ export interface DokokaraProject {
     f0File: string
     notes: DokokaraNote[]
     phrases: DokokaraPhrase[]
+    /** 聞き取った音の区間(編集画面のタイムラインに表示)。この項目が無い以前のプロジェクトはundefined */
+    heardSounds?: DokokaraHeardSound[]
   }
 
   lyrics: DokokaraLine[]
@@ -146,7 +156,7 @@ export function createEmptyProject(name: string): DokokaraProject {
     analysis: {
       separation: 'melband-roformer',
       pitchMethod: 'rmvpe',
-      alignMethod: 'wav2vec2-ctc',
+      alignMethod: 'vowel-dp',
       hopSec: DEFAULT_HOP_SEC,
       frameCount: 0,
       f0File: 'f0.bin',

@@ -5,7 +5,7 @@ import { decodeAudio } from '../lib/audio'
 import { parseLyricsLines } from '../lib/lyrics'
 import { notifyError, bufferForSource } from '../lib/projectActions'
 import { tokenizeLine } from '@shared/tokenize'
-import { allocateTokenTimings, findPitchChangePoints, melodyRangeForLine } from '@shared/analysis/allocate'
+import { allocateTokenTimings, findPitchChangePoints, melodyRangeForLine, timingsFromMorae } from '@shared/analysis/allocate'
 import {
   createEmptyProject,
   DEFAULT_HOP_SEC,
@@ -212,12 +212,16 @@ export function mountAnalyzingScreen(container: HTMLElement, ctx: AppContext): S
       fallbackCursor = end
 
       const annotatedText = a?.annotatedText ?? text
+      const tokens = tokenizeLine(annotatedText)
+      // 解析がモーラごとの時刻を出していればそのまま使う。無い時(読みが空の行等)だけ行の中で配分する
+      const fromMorae = a?.tokenTimings ? timingsFromMorae(tokens, a.tokenTimings) : null
       const tokenRange = melodyRangeForLine(start, end, notes)
-      const timedTokens = allocateTokenTimings(tokenizeLine(annotatedText), tokenRange.start, tokenRange.end, {
-        onsetsSec,
-        pitchChangePoints,
-        alignedReadingTokens: a?.tokenTimings
-      })
+      const timedTokens =
+        fromMorae ??
+        allocateTokenTimings(tokens, tokenRange.start, tokenRange.end, {
+          onsetsSec,
+          pitchChangePoints
+        })
       return {
         id: generateLineId(),
         text: annotatedText,
@@ -287,6 +291,7 @@ export function mountAnalyzingScreen(container: HTMLElement, ctx: AppContext): S
     }
     project.analysis.notes = result.notes
     project.analysis.phrases = result.phraseSegments
+    project.analysis.heardSounds = result.heardSounds ?? []
     project.analysis.frameCount = f0Hz.length
     project.lyrics = buildLyricsLines(lyricsLines, result.lyrics, result.notes, f0Hz)
 

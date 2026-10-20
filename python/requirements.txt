@@ -2,9 +2,9 @@
 #
 # torch と torchaudio はメジャー・マイナーを必ず揃えること。torchaudio は
 # 2.11.0 (2026-03-23) を最後にリリースが止まっており、torch はその後も
-# 2.12/2.13/2.14 とリリースが続いている。torch だけ最新に上げると
-# torchaudio.functional.forced_align (§4.4.7 のフォースドアライメントで使用)
-# の互換性が壊れるおそれがあるため、torch 側もこの組に固定する。
+# 2.12/2.13/2.14 とリリースが続いている。torch だけ最新に上げると torchaudio との
+# 互換性が壊れるおそれがあるため、torch 側もこの組に固定する(以前は歌詞の
+# フォースドアライメントで torchaudio.functional.forced_align を使っていた)。
 torch==2.11.0
 torchaudio==2.11.0
 transformers==5.17.0
@@ -38,16 +38,11 @@ melband-roformer-infer==0.1.5
 # (パッケージ後のアプリ実行時に改めてネットワークへ問い合わせることはない)。
 pyopenjtalk==0.4.1
 
-# 歌詞行リスト全体を曲全体の音声に一括アライメントする(§4.4.7、VAD区間ごとの
-# min(N,M)対応付けだと区間数のズレで歌詞行が丸ごとズレる問題の解決策)。
-# ESPnetチーム実装(Apache-2.0)。Cython拡張(ctc_segmentation_dyn)を同梱するが、
-# 1.7.4時点でNumPy 2.x環境だと`numpy.import_array()`未呼び出しに起因する
-# ImportErrorで動かない(アップストレームの既知の問題、2026-09時点で未修正)。
-# そのため下のnumpy<2ピン留めとセットで使う。
-ctc-segmentation==1.7.4
+# 歌詞のタイミング付け(§4.4.7、vowel_align.py)の母音分類器(ロジスティック回帰)。
+# librosa経由で既に同梱されていたものを、直接使うようになったため明記する。
+scikit-learn==1.9.1
 
-# ctc-segmentationのCython拡張がNumPy 2.x環境で動かないため<2に固定する
-# (torch/basic-pitch/mel-band-roformer等、他の全依存パッケージはnumpy<2でも
-# 問題無く動作することを実機で確認済み)。将来ctc-segmentation側でNumPy 2対応が
-# 入ったら、このピン留めと合わせて見直すこと。
+# 以前はctc-segmentation(歌詞の旧アライメント方式。2026-10-20に削除)のCython拡張が
+# NumPy 2.x環境で動かないため<2に固定していた。他の全依存パッケージはnumpy<2で動作確認
+# 済みのため、そのまま据え置いている。2.xへ上げる時は全依存の動作を確かめ直すこと。
 numpy<2

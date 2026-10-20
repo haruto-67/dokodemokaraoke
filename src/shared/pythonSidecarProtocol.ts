@@ -1,4 +1,4 @@
-import type { AnalysisStepProgress, DokokaraNote, DokokaraPhrase } from './types'
+import type { AnalysisStepProgress, DokokaraHeardSound, DokokaraNote, DokokaraPhrase } from './types'
 
 /**
  * メインプロセス ⇔ Pythonサイドカー間の通信プロトコル(§8.2)。
@@ -28,9 +28,9 @@ export interface AnalyzeSidecarLine {
   annotatedText?: string
   start: number
   end: number
-  /** ctc-segmentationの平均対数尤度をexpで0..1へ変換した値 */
+  /** 行の各モーラの母音部分で、歌詞の母音が聞き取れた確率の平均(0..1)。低い行は配置に自信が無い */
   confidence: number
-  /** CTCが出した読み単位の実タイミング。表示文字/モーラへの配分に利用する。 */
+  /** モーラ(拗音は2文字で1つ)ごとの時刻。モーラの間の無音はすき間として空く。表示文字へはtimingsFromMoraeで割り当てる */
   tokenTimings?: Array<{ reading: string; start: number; end: number }>
 }
 
@@ -43,11 +43,12 @@ export interface AnalyzeSidecarResult {
    *  編集画面のガイド線・スナップ対象としてのみ使う(§4.4.5)。 */
   phraseSegments: DokokaraPhrase[]
   /**
-   * 歌詞行リスト全体を曲全体のvocals音声に一括アライメントした結果(ctc-segmentation、
-   * 要件定義書v3 §4.4.7)。lyricsLinesと同じ長さ・同じ順序で1行1エントリ、欠落は起きない
-   * (VAD区間数とのミスマッチで行がズレていた旧方式の問題を解消)。
+   * 歌詞行リスト全体を曲全体のvocals音声に一括で配置した結果(python/sidecar/vowel_align.py、
+   * 要件定義書v3 §4.4.7)。lyricsLinesと同じ長さ・同じ順序で1行1エントリ、欠落は起きない。
    */
   lyrics: AnalyzeSidecarLine[]
+  /** 聞き取った音(母音・ん・無声)の区間。編集画面のタイムラインに表示する */
+  heardSounds?: DokokaraHeardSound[]
 }
 
 /** サイドカー → メイン(stdout) */

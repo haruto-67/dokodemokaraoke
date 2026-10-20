@@ -26,40 +26,6 @@ export interface AllocateTokenTimingsOptions {
   pitchChangePoints?: number[]
   /** 境界をスナップ候補へ吸着させる許容誤差(秒)。省略時は行の長さに応じて決める */
   snapToleranceSec?: number
-  /** CTCアライメントで得た読みトークン。指定時は均等配分よりこちらを優先する。 */
-  alignedReadingTokens?: Array<{ reading: string; start: number; end: number }>
-}
-
-const READING_SMALL_KANA = new Set(['ゃ', 'ゅ', 'ょ', 'ぁ', 'ぃ', 'ぅ', 'ぇ', 'ぉ', 'ャ', 'ュ', 'ョ', 'ァ', 'ィ', 'ゥ', 'ェ', 'ォ'])
-
-function readingWeight(reading: string): number {
-  if (/^<[^>]+>$/.test(reading)) return 1
-  let count = 0
-  for (const ch of reading) {
-    if (!READING_SMALL_KANA.has(ch)) count++
-  }
-  return Math.max(1, count)
-}
-
-function alignedBoundaryAtWeight(
-  aligned: Array<{ reading: string; start: number; end: number }>,
-  targetWeight: number,
-  totalTargetWeight: number
-): number | null {
-  if (aligned.length === 0 || totalTargetWeight <= 0) return null
-  const weights = aligned.map((item) => readingWeight(item.reading))
-  const sourceTotal = weights.reduce((sum, weight) => sum + weight, 0)
-  const sourceTarget = (targetWeight / totalTargetWeight) * sourceTotal
-  let accumulated = 0
-  for (let i = 0; i < aligned.length; i++) {
-    const next = accumulated + weights[i]
-    if (sourceTarget <= next || i === aligned.length - 1) {
-      const ratio = weights[i] > 0 ? (sourceTarget - accumulated) / weights[i] : 0
-      return aligned[i].start + (aligned[i].end - aligned[i].start) * Math.max(0, Math.min(1, ratio))
-    }
-    accumulated = next
-  }
-  return null
 }
 
 /**
@@ -89,23 +55,11 @@ export function allocateTokenTimings(
   }
   boundaries[boundaries.length - 1] = lineEnd // 丸め誤差を吸収し、必ず行末に一致させる
 
-  // CTCの読みタイミングを、表示トークン側のモーラ重みの累積位置へ対応付ける。語彙が
-  // 複数文字を1ラベルにする場合は、そのラベル区間内をモーラ数で補間する。
-  const aligned = options.alignedReadingTokens?.filter((item) => item.end >= lineStart && item.start <= lineEnd) ?? []
-  if (aligned.length > 0) {
-    let targetWeight = 0
-    for (let i = 1; i < boundaries.length - 1; i++) {
-      targetWeight += weights[i - 1]
-      const alignedTime = alignedBoundaryAtWeight(aligned, targetWeight, totalWeight)
-      if (alignedTime !== null) boundaries[i] = Math.max(lineStart, Math.min(lineEnd, alignedTime))
-    }
-  }
-
   // 2〜3. 内部境界(先頭・末尾は行の開始/終了に固定するため対象外)をスナップ候補に吸着させる
   const snapCandidates = [...(options.onsetsSec ?? []), ...(options.pitchChangePoints ?? [])]
     .filter((t) => t > lineStart && t < lineEnd)
     .sort((a, b) => a - b)
-  const tolerance = options.snapToleranceSec ?? Math.min(aligned.length > 0 ? 0.22 : 0.15, duration * 0.2)
+  const tolerance = options.snapToleranceSec ?? Math.min(0.15, duration * 0.2)
 
   const usedCandidates = new Set<number>()
   for (let i = 1; i < boundaries.length - 1; i++) {
@@ -131,6 +85,38 @@ export function allocateTokenTimings(
   }
 
   return tokens.map((t, i) => ({ ...t, start: boundaries[i], end: boundaries[i + 1] }))
+}
+
+/**
+ * 解析(python/sidecar/vowel_align.py)がモーラごとに出した時刻を、表示トークンへそのまま割り当てる。
+ * トークンはモーラ重み(tokenWeight)の数だけモーラを受け持ち、最初のモーラの開始〜最後のモーラの終了を
+ * その文字の時間にする。モーラの間の無音(息継ぎ)は文字の間のすき間として残す。
+ * 歌詞の読み(Python側のpyopenjtalk)とトークンのモーラ数が合わない時(英単語等)は、重みの比で
+ * 対応するモーラを選ぶ。モーラが無ければnull(呼び出し側で均等配分にする)。
+ */
+export function timingsFromMorae(tokens: Token[], morae: Array<{ start: number; end: number }>): TimedToken[] | null {
+  if (tokens.length === 0) return []
+  if (morae.length === 0) return null
+  const weights = tokens.map(tokenWeight)
+  const totalWeight = weights.reduce((a, b) => a + b, 0)
+  const exact = totalWeight === morae.length
+  const moraIndexAt = (weight: number): number =>
+    exact ? weight : totalWeight > 0 ? Math.round((weight / totalWeight) * morae.length) : 0
+
+  const result: TimedToken[] = []
+  let acc = 0
+  let prevEnd = morae[0].start
+  tokens.forEach((t, i) => {
+    const first = Math.min(moraIndexAt(acc), morae.length - 1)
+    acc += weights[i]
+    const last = Math.min(moraIndexAt(acc), morae.length) - 1
+    // 受け持つモーラが無い(重み0・比で丸めた)トークンは、直前の文字の終わりに長さ0で置く
+    const start = last >= first ? Math.max(prevEnd, morae[first].start) : prevEnd
+    const end = last >= first ? Math.max(start, morae[last].end) : start
+    result.push({ ...t, start, end })
+    prevEnd = end
+  })
+  return result
 }
 
 export interface PitchFrame {

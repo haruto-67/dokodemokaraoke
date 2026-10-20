@@ -1,7 +1,7 @@
 """【実験】歌詞タイミングの結果JSONを、手編集済みの正解プロジェクトと比べて誤差を出す。
 
 結果JSONは {"lyrics": [{"text", "start", "morae": [{"reading", "start"}, ...]}, ...]} の形
-(vowel_dp_align.py / run_current_method.py の出力)。行単位・モーラ単位の開始時刻の誤差
+(vowel_dp_align.py の出力)。行単位・モーラ単位の開始時刻の誤差
 (予測-正解。負なら早すぎ)の平均絶対値・最大・平均(符号付き)を出す。
 
 使い方: python3 eval_alignment.py <展開済み正解プロジェクト> 名前1=<結果1.json> [名前2=<結果2.json> ...] [--detail] [--lines=N]

@@ -8,22 +8,15 @@ Electronのメインプロセスと stdin/stdout 経由でJSON-RPC風メッセ�
 - STEP2 ボーカル/伴奏分離(Mel-Band RoFormer) -- separation.py
 - STEP3 F0抽出(RMVPE) -- rmvpe_model.py
 - STEP4 ノート化(Basic Pitch連携) -- f0_notes.py
-- STEP5/6/7 歌詞行リストの一括タイミング付け(モーラ読み変換+自由デコード) -- lyrics_align.py
+- STEP5/6/7 歌詞行リストの一括タイミング付け(発音成分のDP) -- vowel_align.py
 
 STEP1(音源取得の正規化)はこのサイドカーではなく呼び出し側(src/main/analysisManager.ts、
 同梱ffmpegでWAVへ変換)で行う。source_audio_pathは常に正規化済みWAVである前提でよい。
 
-歌詞タイミング付けは、`align_lyrics_lines_via_free_decode`(自由デコード+テキストの
-編集距離アライメント)を使う。以前のctc-segmentationによる強制アライメント
-(`align_lyrics_lines_to_song`、関数はテスト用に残置)は、与えられた歌詞全部をどこかに
-配置しなければならない制約のため、実際には無音/伴奏残響の区間にも文字を割り当ててしまい、
-行の開始位置が実際の発音より系統的に早くなる問題があった(2026-09-22実測、手動で
-完璧にタイミング合わせした正解データとの比較で平均0.5秒程度)。自由デコードはモデル自身の
-blank確信度をそのまま無音判定に使えるため、実測で誤差0.1秒未満まで改善することを確認した。
-さらに以前のSilero VAD先行検出+min(N,M)対応付け方式(区間数がズレると後続行が丸ごと
-ズレる問題があった)も、この自由デコード方式では歌詞行が時系列順に出現するという前提だけに
-依存するため発生しない。vad.pyはこの用途では使わなくなったが、ファイル自体は削除せず残している
-(テスト済みで他用途に転用しうるため)。詳細は[[どこカラv3の技術選定]]参照。
+歌詞タイミング付けは、vowel_align.pyの発音成分(母音5種+ん+無音)のDPで行う(2026-10-20に、
+wav2vec2 CTCの自由デコード+編集距離による方式から置き換えた。正解データ2曲で、行の開始の
+誤差が平均0.35〜1.4秒から0.014〜0.042秒に縮んだ。経緯はNestio「どこカラ 発音成分アライメント案」)。
+vad.pyのフレーズ区間は歌詞タイミング付けには使わず、編集画面のガイド線・スナップ対象としてだけ使う。
 
 標準ライブラリ以外の重い依存(torch等)は `separation`/`rmvpe_model` モジュール内
 でのみimportする(起動・疎通確認だけならtorch無しでも動くようにするため)。
@@ -86,12 +79,12 @@ def handle_analyze(req: dict) -> None:
     import vad
     from rmvpe_model import RMVPE
     from f0_notes import notes_from_f0
-    from lyrics_align import align_lyrics_lines_via_free_decode
+    from vowel_align import align_lyrics_lines
 
     vocal_label = "ボーカル/伴奏分離(Mel-Band RoFormer)"
     pitch_label = "F0抽出・ノート化(RMVPE+Basic Pitch)"
     phrase_label = "フレーズ区間検出(Silero VAD)"
-    align_label = "歌詞のタイミング付け(モーラ読み+ctc-segmentation)"
+    align_label = "歌詞のタイミング付け(母音・子音の聞き取り)"
 
     _send_progress(req_id, "vocalIsolation", vocal_label, 0.0, "running")
     try:
@@ -141,18 +134,17 @@ def handle_analyze(req: dict) -> None:
         return
     _send_progress(req_id, "phrase", phrase_label, 1.0, "done")
 
-    # STEP6/7: 歌詞行リスト全体を、曲全体のvocals音声に一括アライメントする(ctc-segmentation)。
-    # 旧実装(VAD検出区間とmin(歌詞行数,検出区間数)で1対1対応付け)は、VADが想定と違う個数に
-    # フレーズを区切ると、そこから後ろの行が丸ごとズレる問題があった。歌詞行は曲中で必ず
-    # 時系列順に出現するという前提だけに依存する一括アライメント方式に置き換えることで、
-    # 区間数のズレという概念自体を無くす。詳細は[[どこカラv3の技術選定]]参照。
+    # STEP6/7: 歌詞行リスト全体を、曲全体のvocals音声に一括で配置する(歌詞行は曲中で必ず時系列順に
+    # 出現するという前提だけに依存する)。F0はSTEP3のRMVPEの出力(10ms刻み)をそのまま使う。
     _send_progress(req_id, "assign", align_label, 0.0, "running")
     try:
-        aligned_lines = align_lyrics_lines_via_free_decode(
+        aligned_lines, heard = align_lyrics_lines(
             lyrics_lines,
             vocals_audio.astype("float32"),
+            f0_hz,
+            notes,
             paths.model_path("japanese-wav2vec2-base-rs35kh.safetensors"),
-            notes=notes,
+            on_progress=lambda fraction: _send_progress(req_id, "assign", align_label, fraction, "running"),
         )
     except Exception as exc:  # noqa: BLE001 -- 失敗理由をerrorメッセージとして呼び出し側に伝える境界
         send({"type": "error", "id": req_id, "message": f"歌詞のタイミング付けに失敗しました: {exc}"})
@@ -170,6 +162,7 @@ def handle_analyze(req: dict) -> None:
                 "notes": notes,
                 "phraseSegments": phrase_segments,
                 "lyrics": aligned_lines,
+                "heardSounds": heard,
             },
         }
     )

@@ -77,7 +77,7 @@ function tokenizeRubySegment(text: string, ruby: string): Token[] {
   const moras = splitMoras(ruby)
   if (moras.length === 0) return [{ text, ruby }]
   const baseChars = Array.from(text)
-  // 1トークン=1モーラを保つ(Python側の自由デコードもモーラ単位でタイミングを出しており、
+  // 1トークン=1モーラを保つ(Python側の解析もモーラ単位でタイミングを出しており、
   // ここでモーラをまとめると§4.6.3のタイミング配分がその精度を捨ててしまう)。ルビの方が
   // 文字数より長い場合、末尾の本文が空になるトークンができるが、これは意図的な設計であり、
   // 「本文なしトークンが浮いて見える」表示上の問題は本番画面側(performScreen.ts)で

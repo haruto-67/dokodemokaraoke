@@ -22,7 +22,7 @@ npm run build:win  # Windows: NSISインストーラビルド(release/ 以下に
 ### Windowsでのビルド前提条件
 
 `npm run build:win`(内部で`npm run build:python-runtime`を実行)は、Pythonサイドカーの依存の一部
-(`pyopenjtalk`, `ctc-segmentation`)がPyPIにWindows向け事前ビルド済みwheelを配布しておらず、その場で
+(`pyopenjtalk`)がPyPIにWindows向け事前ビルド済みwheelを配布しておらず、その場で
 ネイティブ拡張をソースからコンパイルする。事前に以下が必要:
 
 - [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)(「C++によるデスクトップ開発」ワークロード)

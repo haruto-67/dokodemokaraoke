@@ -33,7 +33,14 @@ import {
 import { tokenizeLine } from '@shared/tokenize'
 import { parseRubyLine, rubyToPlainText } from '@shared/ruby'
 import { allocateTokenTimings, findPitchChangePoints } from '@shared/analysis/allocate'
-import { DEFAULT_HOP_SEC, type DokokaraLine, type DokokaraRhythm, type DokokaraToken, type PlaySource } from '@shared/types'
+import {
+  DEFAULT_HOP_SEC,
+  type DokokaraHeardSound,
+  type DokokaraLine,
+  type DokokaraRhythm,
+  type DokokaraToken,
+  type PlaySource
+} from '@shared/types'
 
 const BASE_PPS = 80 // 1倍ズームでの1秒あたりピクセル数
 // タイムラインの末尾より先(再生バーが存在しない範囲)へも手動スクロールできるようにする余白(px)
@@ -41,6 +48,18 @@ const SCROLL_END_PADDING_PX = 400
 const MIN_ZOOM = 0.25
 const MAX_ZOOM = 8
 const RIBBON_HEIGHT = 110
+// リボンの下端に出す「聞き取った音」の帯の高さ
+const HEARD_BAND_HEIGHT = 14
+// 聞き取った音の表示(母音は色相を分け、無声は灰色の「・」)
+const HEARD_SOUND_STYLE: Record<DokokaraHeardSound['label'], { text: string; color: string }> = {
+  a: { text: 'あ', color: '#ff6b6b' },
+  i: { text: 'い', color: '#ffd166' },
+  u: { text: 'う', color: '#06d6a0' },
+  e: { text: 'え', color: '#4cc9f0' },
+  o: { text: 'お', color: '#b388ff' },
+  N: { text: 'ん', color: '#f78fb3' },
+  unvoiced: { text: '・', color: '#9e9e9e' }
+}
 const BLOCK_HEIGHT = 40
 const BOUNDARY_HEIGHT = 36
 const EDGE_GRAB_PX = 6
@@ -395,6 +414,32 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
         line.setAttribute('stroke-width', '1')
         line.setAttribute('opacity', '0.18')
         svg.appendChild(line)
+      }
+    }
+
+    // 聞き取った音(母音・ん・無声)の帯。リボンの下端に、区間ごとに色と文字で出す
+    const heard = s.project?.analysis.heardSounds ?? []
+    const bandY = RIBBON_HEIGHT - HEARD_BAND_HEIGHT
+    for (const h of heard) {
+      const x = xForTime(h.start)
+      const w = Math.max(1, xForTime(h.end) - x)
+      const rect = document.createElementNS(ns, 'rect')
+      rect.setAttribute('x', x.toFixed(1))
+      rect.setAttribute('y', String(bandY))
+      rect.setAttribute('width', w.toFixed(1))
+      rect.setAttribute('height', String(HEARD_BAND_HEIGHT))
+      rect.setAttribute('fill', HEARD_SOUND_STYLE[h.label].color)
+      rect.setAttribute('opacity', '0.35')
+      svg.appendChild(rect)
+      if (w >= 9) {
+        const text = document.createElementNS(ns, 'text')
+        text.setAttribute('x', (x + w / 2).toFixed(1))
+        text.setAttribute('y', String(RIBBON_HEIGHT - 3))
+        text.setAttribute('text-anchor', 'middle')
+        text.setAttribute('font-size', '10')
+        text.setAttribute('fill', 'var(--color-text)')
+        text.textContent = HEARD_SOUND_STYLE[h.label].text
+        svg.appendChild(text)
       }
     }
 

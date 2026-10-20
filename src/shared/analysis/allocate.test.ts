@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { allocateTokenTimings, findPitchChangePoints, melodyRangeForLine, type PitchFrame } from './allocate'
+import { allocateTokenTimings, findPitchChangePoints, melodyRangeForLine, timingsFromMorae, type PitchFrame } from './allocate'
 import type { Token } from '../tokenize'
 
 function tok(text: string, ruby: string | null = null): Token {
@@ -69,30 +69,41 @@ describe('allocateTokenTimings', () => {
     const result = allocateTokenTimings([tok('あ')], 2, 5)
     expect(result).toEqual([{ text: 'あ', ruby: null, start: 2, end: 5 }])
   })
+})
 
-  it('CTCの読みタイミングを表示文字の境界へ反映する', () => {
-    const tokens = [tok('歌'), tok('い'), tok('出'), tok('す')]
-    const result = allocateTokenTimings(tokens, 1, 6, {
-      alignedReadingTokens: [
-        { reading: 'うた', start: 1, end: 3.5 },
-        { reading: 'いだす', start: 3.5, end: 6 }
-      ]
-    })
-    // 表示4文字に対する読みは5モーラなので、単純な4等分ではなくCTC区間内を補間する。
-    expect(result[0].end).toBeCloseTo(2.5625)
-    expect(result[1].end).toBeCloseTo(3.9167)
-    expect(result[2].end).toBeCloseTo(4.9583)
+describe('timingsFromMorae', () => {
+  const morae = [
+    { start: 1, end: 1.3 },
+    { start: 1.3, end: 1.6 },
+    { start: 2, end: 2.4 }, // 前のモーラとの間に息継ぎ
+    { start: 2.4, end: 3 }
+  ]
+
+  it('トークン1つ=1モーラなら、モーラの時刻をそのまま使い、息継ぎのすき間も残す', () => {
+    const r = timingsFromMorae([tok('あ'), tok('い'), tok('う'), tok('え')], morae)!
+    expect(r.map((t) => [t.start, t.end])).toEqual([
+      [1, 1.3],
+      [1.3, 1.6],
+      [2, 2.4],
+      [2.4, 3]
+    ])
   })
 
-  it('ルビのモーラ数をCTC読みタイミングへの対応付けに使う', () => {
-    const tokens = [tok('今日', 'きょう'), tok('は')]
-    const result = allocateTokenTimings(tokens, 0, 3, {
-      alignedReadingTokens: [
-        { reading: 'きょう', start: 0, end: 2 },
-        { reading: 'わ', start: 2, end: 3 }
-      ]
-    })
-    expect(result[0].end).toBeCloseTo(2)
+  it('ルビや促音で複数モーラを受け持つトークンは、最初のモーラの開始〜最後のモーラの終了になる', () => {
+    const r = timingsFromMorae([tok('季節', 'きせつ'), tok('あっ')], [...morae, { start: 3, end: 3.2 }])!
+    expect(r[0]).toMatchObject({ start: 1, end: 2.4 })
+    expect(r[1]).toMatchObject({ start: 2.4, end: 3.2 })
+  })
+
+  it('モーラ数が合わない時は重みの比で対応付け、順序は崩さない', () => {
+    // 英単語は重み1だが読みは複数モーラになる
+    const r = timingsFromMorae([tok('Love'), tok('あ')], morae)!
+    expect(r[0]).toMatchObject({ start: 1, end: 1.6 })
+    expect(r[1]).toMatchObject({ start: 2, end: 3 })
+  })
+
+  it('モーラが無ければnull', () => {
+    expect(timingsFromMorae([tok('あ')], [])).toBeNull()
   })
 })
 
