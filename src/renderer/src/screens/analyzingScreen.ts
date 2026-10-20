@@ -3,6 +3,8 @@ import type { ScreenHandle } from '../lib/screen'
 import { el, clear } from '../lib/dom'
 import { decodeAudio } from '../lib/audio'
 import { parseLyricsLines } from '../lib/lyrics'
+import { estimateTempo, isTempoSteady, onsetStrengthEnvelope } from '../lib/tempo'
+import { autoBeatDivision, quantizeLyricsToBeats } from '../lib/beatQuantize'
 import { notifyError, bufferForSource } from '../lib/projectActions'
 import { tokenizeLine } from '@shared/tokenize'
 import { allocateTokenTimings, findPitchChangePoints, melodyRangeForLine, timingsFromMorae } from '@shared/analysis/allocate'
@@ -294,6 +296,18 @@ export function mountAnalyzingScreen(container: HTMLElement, ctx: AppContext): S
     project.analysis.heardSounds = result.heardSounds ?? []
     project.analysis.frameCount = f0Hz.length
     project.lyrics = buildLyricsLines(lyricsLines, result.lyrics, result.notes, f0Hz)
+    // 伴奏からテンポを推定し(編集画面のBPM推定と同じ処理)、テンポが曲の途中でも保たれている時だけ
+    // 文字の開始を拍の格子へ寄せる。揺れる曲・短い音源では推定が外れやすく、寄せるとかえってずれる
+    const channels: Float32Array[] = []
+    for (let i = 0; i < instrumentalBuffer.numberOfChannels; i++) channels.push(instrumentalBuffer.getChannelData(i))
+    const { envelope, frameRate } = onsetStrengthEnvelope(channels, instrumentalBuffer.sampleRate)
+    const rhythm = estimateTempo(envelope, frameRate)
+    if (rhythm) {
+      project.rhythm = rhythm
+      if (isTempoSteady(envelope, frameRate, rhythm)) {
+        project.lyrics = quantizeLyricsToBeats(project.lyrics, rhythm, autoBeatDivision(project.lyrics, rhythm))
+      }
+    }
 
     const audioState: EditorAudioState = {
       analysisBuffer: vocalsBuffer,

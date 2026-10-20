@@ -10,8 +10,8 @@
     CTC出力をblank除外で割り直した母音確率だけでDPを解き、DPの配置結果から母音ラベルを作って
     分類器を学習→再度DP、を繰り返す。CTCの出力は1フレームだけ尖り、伸ばした母音の区間は
     blank確率がほぼ1になるため、時刻決めには使わず初回ラベルの供給元としてだけ使う。
-    分類器の特徴をwav2vec2の中間層にすると、前後の文脈を混ぜるため母音の切り替わりを
-    0.3秒ほど先取りしたため、時間方向に広がらないMFCCを使う
+    分類器の特徴はMFCCを主にし、wav2vec2の中間層を後ろへずらして軽く混ぜる(中間層だけだと、
+    前後の文脈を混ぜるため母音の切り替わりを0.3秒ほど先取りする。聞き分け自体はMFCCより強い)
 - 歌詞はpyopenjtalk(ルビ優先、lyrics_reading.text_to_hiragana_reading)のモーラ読みを
   同じクラスに落とす。「ん」「ー」「っ」は前の音にくっつく(長さ0で読み飛ばす)ことも許す
 - 各モーラは「子音(省略可)→母音」の状態で表し、歌詞の順序を守ったまま曲全体を1回のViterbiで配置する
@@ -57,6 +57,13 @@ class Params:
     # 母音分類器
     mfcc_n: int = 20
     mfcc_nfft: int = 1024  # 64ms。低い声で倍音を分解できるよう、20ms刻みより広い窓で見る
+    # wav2vec2の中間層の特徴も分類器に加える。母音の聞き分けはMFCCより強い(正解ラベルで学習させた時の
+    # フレーム正解率: ショート2で61%→74%)が、前後の文脈を混ぜるため母音の切り替わりを先取りする。
+    # そのぶん後ろへずらし、MFCCより軽く重み付けして混ぜる(自己学習後の正解率 73%→86%、モーラの開始の誤差は同等)
+    hidden_layer: int = 8  # 12層中
+    hidden_dims: int = 32  # PCAで落とす次元
+    hidden_weight: float = 0.75
+    hidden_delay_frames: int = 6  # 120ms
     clf_c: float = 0.01  # ロジスティック回帰の正則化(小さいほど強い)。自己学習のラベルは誤りを含むため強めにする
     iterations: int = 5
     label_skip_head: float = 0.3  # ラベル化でモーラの母音の先頭から除く割合(子音からの遷移部分)
@@ -70,6 +77,8 @@ class Params:
     cue_sigma_sec: float = 0.02
     note_bonus: float = 2.0  # ノート開始に乗った時に下げるコスト(手がかりの補助。単独では粗い)
     note_sigma_sec: float = 0.04
+    beat_bonus: float = 0.0  # 拍の格子(8分音符等)に乗った時に下げるコスト。格子が渡された時だけ効く
+    beat_sigma_sec: float = 0.02
     dip_window_sec: float = 0.1
     dip_min_db: float = 2.0
     dip_full_db: float = 6.0
@@ -159,23 +168,24 @@ def starts_at_vowel(m: Mora) -> bool:
 # ---------------------------------------------------------------- 音響特徴
 
 
-def ctc_log_probs(audio: np.ndarray, model_path: Path):
-    """wav2vec2のCTCのlog確率(20msフレーム)とblank IDを返す。20秒チャンクで推論して連結。"""
+def wav2vec2_outputs(audio: np.ndarray, model_path: Path, layer: int):
+    """wav2vec2のCTCのlog確率と指定した中間層の特徴(どちらも20msフレーム)、blank IDを返す。20秒チャンクで推論して連結。"""
     import torch
 
     from lyrics_reading import load_wav2vec2_model, normalize_audio
 
     model = load_wav2vec2_model(model_path)
     chunk = 20 * SR
-    lps = []
+    lps, hids = [], []
     with torch.no_grad():
         for s in range(0, len(audio), chunk):
             x = audio[s : s + chunk]
             if len(x) < HOP * 2:
                 continue
-            logits = model(torch.from_numpy(normalize_audio(x)).unsqueeze(0)).logits
-            lps.append(torch.log_softmax(logits, dim=-1)[0].numpy())
-    return np.concatenate(lps), model.config.pad_token_id
+            out = model(torch.from_numpy(normalize_audio(x)).unsqueeze(0), output_hidden_states=True)
+            lps.append(torch.log_softmax(out.logits, dim=-1)[0].numpy())
+            hids.append(out.hidden_states[layer][0].numpy())
+    return np.concatenate(lps), np.concatenate(hids), model.config.pad_token_id
 
 
 def ctc_vowel_probs(log_probs: np.ndarray, blank_id: int) -> np.ndarray:
@@ -309,6 +319,17 @@ def note_bonus(n_frames: int, notes: list, params: Params) -> np.ndarray:
     pos = np.clip(np.searchsorted(onsets, t), 1, len(onsets) - 1)
     d = np.minimum(np.abs(t - onsets[pos - 1]), np.abs(t - onsets[pos]))
     return params.note_bonus * np.exp(-0.5 * (d / params.note_sigma_sec) ** 2)
+
+
+def beat_bonus(n_frames: int, beat_times: Optional[np.ndarray], params: Params) -> np.ndarray:
+    """拍の格子の各時刻に近いフレームほど大きいボーナス(モーラの開始を拍に乗せやすくする)。"""
+    if beat_times is None or len(beat_times) < 2 or params.beat_bonus == 0:
+        return np.zeros(n_frames)
+    t = np.arange(n_frames) * FRAME_SEC
+    grid = np.sort(np.asarray(beat_times, dtype=np.float64))
+    pos = np.clip(np.searchsorted(grid, t), 1, len(grid) - 1)
+    d = np.minimum(np.abs(t - grid[pos - 1]), np.abs(t - grid[pos]))
+    return params.beat_bonus * np.exp(-0.5 * (d / params.beat_sigma_sec) ** 2)
 
 
 # ---------------------------------------------------------------- DP
@@ -469,8 +490,22 @@ def train_and_predict(feats: np.ndarray, y: np.ndarray, params: Params) -> np.nd
     return out / out.sum(1, keepdims=True)
 
 
-def normalize_features(mfcc: np.ndarray) -> np.ndarray:
-    return (mfcc - mfcc.mean(0)) / (mfcc.std(0) + 1e-6)
+def _standardize(x: np.ndarray) -> np.ndarray:
+    return (x - x.mean(0)) / (x.std(0) + 1e-6)
+
+
+def classifier_features(mfcc: np.ndarray, hidden: np.ndarray, params: Params) -> np.ndarray:
+    """母音分類器の入力: 正規化したMFCC+Δと、wav2vec2中間層をPCAで落として後ろへずらし、重みを掛けたもの。"""
+    from sklearn.decomposition import PCA
+
+    n = len(mfcc)
+    h = _standardize(hidden[:n])
+    z = PCA(n_components=min(params.hidden_dims, h.shape[1], n), random_state=0).fit_transform(h)
+    z = z / (z.std(0) + 1e-6)
+    d = params.hidden_delay_frames
+    if d > 0:
+        z = np.concatenate([np.repeat(z[:1], d, axis=0), z[:-d]])
+    return np.concatenate([_standardize(mfcc), params.hidden_weight * z], axis=1)
 
 
 # ---------------------------------------------------------------- 実行
@@ -508,12 +543,12 @@ class Features:
     ctc_vp: np.ndarray  # 初回DP用の母音確率(20msフレーム × CLASSES)
     f0: np.ndarray  # RMVPEのF0(Hz、無声は0。10ms刻み)
     db: np.ndarray  # 最大音量からの相対dB(10ms刻み)
-    mfcc: np.ndarray  # 正規化済みMFCC+Δ(20msフレーム)
+    frame_feats: np.ndarray  # 母音分類器の入力(20msフレーム。classifier_features)
 
 
 def compute_features(audio: np.ndarray, f0_100fps: np.ndarray, model_path: Path, params: Params) -> Features:
     """audioは16kHzモノラルのボーカル。f0はRMVPEで同じaudioから求めた10ms刻みのF0。"""
-    log_probs, blank_id = ctc_log_probs(audio, model_path)
+    log_probs, hidden, blank_id = wav2vec2_outputs(audio, model_path, params.hidden_layer)
     n = len(log_probs)
     db = relative_db(audio)
     m = min(len(f0_100fps), len(db))
@@ -521,7 +556,7 @@ def compute_features(audio: np.ndarray, f0_100fps: np.ndarray, model_path: Path,
         ctc_vp=ctc_vowel_probs(log_probs, blank_id),
         f0=np.asarray(f0_100fps[:m], dtype=np.float64),
         db=db[:m],
-        mfcc=normalize_features(mfcc_features(audio, n, params.mfcc_n, params.mfcc_nfft)),
+        frame_feats=classifier_features(mfcc_features(audio, n, params.mfcc_n, params.mfcc_nfft), hidden, params),
     )
 
 
@@ -540,6 +575,7 @@ def align(
     notes: list,
     params: Optional[Params] = None,
     on_progress: Optional[Callable[[float], None]] = None,
+    beat_times: Optional[np.ndarray] = None,
 ) -> Alignment:
     """歌詞行の全モーラを曲全体へ配置する。初回はCTCの母音確率でDPを解き、その配置を
     ラベルにした母音分類器で解き直すことをparams.iterations回繰り返す。"""
@@ -547,7 +583,11 @@ def align(
     morae = lyrics_to_morae(lyrics_lines)
     n = len(feats.ctc_vp)
     sil = silence_prob(feats.f0, feats.db, n, params)
-    bonus = note_bonus(n, notes, params) + params.cue_bonus * boundary_cue(feats.f0, feats.db, n, params)
+    bonus = (
+        note_bonus(n, notes, params)
+        + params.cue_bonus * boundary_cue(feats.f0, feats.db, n, params)
+        + beat_bonus(n, beat_times, params)
+    )
     hold = hold_cost(feats.f0, feats.db, n, params)
 
     vowel_p = feats.ctc_vp
@@ -557,7 +597,7 @@ def align(
         if on_progress:
             on_progress(it / (params.iterations + 1))
         y = labels_from_alignment(morae, segs, sil, params, n)
-        vowel_p = train_and_predict(feats.mfcc, y, params)
+        vowel_p = train_and_predict(feats.frame_feats, y, params)
         new_segs, cost = viterbi(morae, vowel_p, sil, bonus, hold, params)
         moved = sum(1 for a, b in zip(segs, new_segs) if (a and a[0]) != (b and b[0]))
         segs = new_segs

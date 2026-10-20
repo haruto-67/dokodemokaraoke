@@ -40,14 +40,14 @@ def load_vocal_16k(project_dir: Path) -> np.ndarray:
 def load_features(project_dir: Path, cache: Path | None, params: Params) -> Features:
     if cache and cache.exists():
         z = np.load(cache)
-        return Features(ctc_vp=z["ctc_vp"], f0=z["f0"], db=z["db"], mfcc=z["mfcc"])
+        return Features(ctc_vp=z["ctc_vp"], f0=z["f0"], db=z["db"], frame_feats=z["frame_feats"])
     from rmvpe_model import RMVPE
 
     audio = load_vocal_16k(project_dir)
     f0 = RMVPE(str(RMVPE_PATH), device="cpu").infer_from_audio(audio)
     feats = compute_features(audio, f0, MODEL_PATH, params)
     if cache:
-        np.savez(cache, ctc_vp=feats.ctc_vp, f0=feats.f0, db=feats.db, mfcc=feats.mfcc)
+        np.savez(cache, ctc_vp=feats.ctc_vp, f0=feats.f0, db=feats.db, frame_feats=feats.frame_feats)
     return feats
 
 
@@ -56,6 +56,7 @@ def main() -> None:
     ap.add_argument("project_dir", type=Path)
     ap.add_argument("out_json", type=Path)
     ap.add_argument("--cache", type=Path, help="音響特徴のキャッシュ(.npz)。MFCCの設定を変える時は作り直す")
+    ap.add_argument("--beat", metavar="BPM,最初の拍,分割", help="拍の格子(例: 188,0.045,2 は188BPMの8分音符)")
     ap.add_argument("--set", action="append", default=[], metavar="名前=値", help="Paramsの値を上書きする(切り分け用)")
     args = ap.parse_args()
 
@@ -67,7 +68,13 @@ def main() -> None:
     project = json.loads((args.project_dir / "project.json").read_text())
     lines = [l["text"] for l in project["lyrics"]]
     feats = load_features(args.project_dir, args.cache, params)
-    result = align(lines, feats, project["analysis"]["notes"], params)
+    beat_times = None
+    if args.beat:
+        bpm, first, div = (float(x) for x in args.beat.split(","))
+        step = 60 / bpm / div
+        dur = len(feats.ctc_vp) * 0.02
+        beat_times = first + step * np.arange(-int(first / step), int((dur - first) / step) + 1)
+    result = align(lines, feats, project["analysis"]["notes"], params, beat_times=beat_times)
     for it, cost, moved in result.history:
         print(f"iter {it}: cost={cost:.1f} moved={moved}", file=sys.stderr)
 

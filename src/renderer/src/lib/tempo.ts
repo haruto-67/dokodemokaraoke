@@ -183,6 +183,30 @@ export function estimateTempo(envelope: Float32Array, frameRate: number, minBpm 
   return { bpm: Math.round(bpm * 10) / 10, firstBeatSec: Math.round(bestPhase * 1000) / 1000 }
 }
 
+/**
+ * 曲全体で推定したテンポが、曲の途中でも保たれているか。20秒ずつの区間で推定し直し、
+ * 8割以上の区間が同じBPM(倍・半分も可、3%以内)なら一定とみなす。区間が3つ未満(約40秒未満)の
+ * 短い音源は確かめられないためfalse。テンポが揺れる曲で拍へ寄せると、かえってずれるため使う。
+ */
+export function isTempoSteady(envelope: Float32Array, frameRate: number, rhythm: Rhythm): boolean {
+  const win = Math.round(20 * frameRate)
+  const hop = Math.round(10 * frameRate)
+  let total = 0
+  let agree = 0
+  const starts: number[] = []
+  for (let s = 0; s + win <= envelope.length; s += hop) starts.push(s)
+  // 端数で曲の終わりが見られないことがないよう、最後は曲の終わりに揃えた区間も見る
+  if (starts.length > 0 && starts[starts.length - 1] + win < envelope.length) starts.push(envelope.length - win)
+  for (const s of starts) {
+    const local = estimateTempo(envelope.subarray(s, s + win), frameRate)
+    if (!local) continue
+    total++
+    const ratio = local.bpm / rhythm.bpm
+    if ([0.5, 1, 2].some((r) => Math.abs(ratio / r - 1) <= 0.03)) agree++
+  }
+  return total >= 3 && agree >= total * 0.8
+}
+
 export interface BeatGridPoint {
   time: number
   /** 拍の頭か(falseは拍を分割した位置) */

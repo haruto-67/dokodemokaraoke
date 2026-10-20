@@ -6,6 +6,7 @@ import { snapTime, nearestGridTime, SNAP_PRIORITY, type SnapTarget } from '../li
 import { reallocateRespectingLocks } from '../lib/retiming'
 import { resizeLineTokens } from '../lib/resizeLine'
 import { findTokenForEdge, setTokenEdgeAt, type TokenEdge } from '../lib/playheadTiming'
+import { autoBeatDivision, quantizeLyricsToBeats } from '../lib/beatQuantize'
 import {
   addTempoChange,
   alignBeatAt,
@@ -130,6 +131,7 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
   const beatNudgeBackBtn = el('button', { className: 'btn btn-ghost' }, ['◀'])
   const beatNudgeFwdBtn = el('button', { className: 'btn btn-ghost' }, ['▶'])
   const addTempoChangeBtn = el('button', { className: 'btn btn-ghost' }, ['+ テンポ変更'])
+  const quantizeLyricsBtn = el('button', { className: 'btn btn-ghost' }, ['歌詞を拍に合わせる'])
   const metronomeBtn = el('button', { className: 'btn btn-ghost' }, ['メトロノーム'])
   const zoomOutBtn = el('button', { className: 'btn btn-ghost' }, ['−'])
   const zoomFitBtn = el('button', { className: 'btn btn-ghost' }, ['全体表示'])
@@ -157,7 +159,7 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
     group(playBtn, timeLabel, speedSelect, sourceSelect),
     group(zoomOutBtn, zoomFitBtn, zoomInBtn, guidesBtn),
     group(snapBtn, beatSnapSelect),
-    group(metronomeBtn, bpmInput, bpmEstimateBtn, beatAlignBtn, beatNudgeBackBtn, beatNudgeFwdBtn, addTempoChangeBtn),
+    group(metronomeBtn, bpmInput, bpmEstimateBtn, beatAlignBtn, beatNudgeBackBtn, beatNudgeFwdBtn, addTempoChangeBtn, quantizeLyricsBtn),
     group(addLineBtn, reallocateBtn, tapModeBtn),
     group(tokenStartHereBtn, tokenEndHereBtn),
     group(countInLabel, jingleLabel),
@@ -192,6 +194,11 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
     [beatNudgeBackBtn, '再生位置の区間の拍を10ms早めます(Shiftを押しながらで50ms)。波形上部の♩の札をドラッグしても動かせます', null],
     [beatNudgeFwdBtn, '再生位置の区間の拍を10ms遅らせます(Shiftを押しながらで50ms)', null],
     [addTempoChangeBtn, '再生位置からテンポを変えます。波形上部に♩の札が出るので、ドラッグで位置を、BPM欄で速さを変えられます(×で削除)', null],
+    [
+      quantizeLyricsBtn,
+      '全ての文字の開始を、近くの拍の線(リズムスナップの音符。オフの時は歌詞に合わせて自動で選ぶ)へ寄せます。拍から遠い文字とロックした文字は動かしません',
+      null
+    ],
     [addLineBtn, '再生位置に新しい行を追加します', 'addLine'],
     [reallocateBtn, '選択中の行の文字タイミングを自動で割り振り直します(ロックした文字はそのまま)', 'reallocateLine'],
     [
@@ -1389,6 +1396,17 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
     renderSidePanel()
   }
   tokenStartHereBtn.addEventListener('click', () => setTokenEdgeAtPlayhead('start'))
+  quantizeLyricsBtn.addEventListener('click', () => {
+    const s = state()
+    const rhythm = s.project?.rhythm
+    const lines = s.project?.lyrics
+    if (!rhythm || !lines) return
+    const division = s.beatSnapDivision > 0 ? s.beatSnapDivision : autoBeatDivision(lines, rhythm)
+    ctx.editor.applyAndCommit((current) => quantizeLyricsToBeats(current, rhythm, division))
+    renderBlocks()
+    renderBoundary()
+    renderSidePanel()
+  })
   tokenEndHereBtn.addEventListener('click', () => setTokenEdgeAtPlayhead('end'))
 
   // ---------- 再生速度(低速再生での編集用) ----------
@@ -1442,7 +1460,7 @@ export function mountEditorScreen(container: HTMLElement, ctx: AppContext): Scre
     if (document.activeElement !== bpmInput) bpmInput.value = shownBpm !== null ? String(shownBpm) : ''
     bpmInput.placeholder = 'BPM'
     const on = rhythmVisible()
-    for (const c of [bpmInput, bpmEstimateBtn, beatAlignBtn, beatNudgeBackBtn, beatNudgeFwdBtn, addTempoChangeBtn]) {
+    for (const c of [bpmInput, bpmEstimateBtn, beatAlignBtn, beatNudgeBackBtn, beatNudgeFwdBtn, addTempoChangeBtn, quantizeLyricsBtn]) {
       c.style.display = on ? '' : 'none'
     }
   }

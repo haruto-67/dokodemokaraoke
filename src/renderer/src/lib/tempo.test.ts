@@ -6,6 +6,7 @@ import {
   beatGridTimes,
   bpmAt,
   estimateTempo,
+  isTempoSteady,
   moveSegmentStart,
   nearestBeatGridTime,
   normalizeRhythm,
@@ -72,6 +73,23 @@ describe('estimateTempo', () => {
 
   it('短すぎる音声ではnullを返す', () => {
     expect(estimateTempo(new Float32Array(10), 43)).toBeNull()
+  })
+})
+
+describe('isTempoSteady', () => {
+  it('一定のテンポが続く音源はtrue、途中でテンポが変わる・短い音源はfalse', () => {
+    const steady = clickTrack(120, 0.25, 60)
+    const env = onsetStrengthEnvelope([steady], 22050)
+    expect(isTempoSteady(env.envelope, env.frameRate, { bpm: 120, firstBeatSec: 0.25 })).toBe(true)
+
+    const short = onsetStrengthEnvelope([clickTrack(120, 0.25, 30)], 22050)
+    expect(isTempoSteady(short.envelope, short.frameRate, { bpm: 120, firstBeatSec: 0.25 })).toBe(false)
+
+    const changing = new Float32Array(60 * 22050)
+    changing.set(clickTrack(120, 0.25, 30))
+    changing.set(clickTrack(90, 0.25, 30), 30 * 22050)
+    const env2 = onsetStrengthEnvelope([changing], 22050)
+    expect(isTempoSteady(env2.envelope, env2.frameRate, { bpm: 120, firstBeatSec: 0.25 })).toBe(false)
   })
 })
 
